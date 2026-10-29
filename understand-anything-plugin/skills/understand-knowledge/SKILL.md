@@ -135,3 +135,22 @@ Dispatch `article-analyzer` subagents to extract implicit knowledge:
 - Categories and taxonomy come from index.md section headings, NOT from filename prefixes. The Karpathy spec is intentionally abstract about naming conventions.
 - The graph uses `kind: "knowledge"` to signal the dashboard to use force-directed layout instead of hierarchical dagre.
 - Source nodes from raw/ are lightweight (filename + size only) — we don't parse PDFs or binary files.
+
+## Structured Semantica input
+
+OntoScience integrations must use the structured boundary when the canonical
+knowledge already exists in Semantica. Do not serialize a Semantica snapshot
+into fake `Article` pages or issue one model request per entity. Prepare one
+JSON input containing the snapshot ID, canonical entity/document IDs, evidence
+spans, assertions, relations, categories, and any completed analysis batches,
+then run:
+
+```bash
+python3 "<SKILL_DIR>/assemble-semantica-graph.py" input.json output.json
+```
+
+The assembler preserves Semantica IDs and evidence lineage, keeps same-name
+entities distinct, and passes through the supplied Tour. Missing complexity is
+left unassessed; it is never replaced with a guessed or structural default.
+Model analysis is an upstream batch operation (normally 10–16 documents per
+Chat Completions request), not work performed by this assembler.
