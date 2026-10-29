@@ -23,7 +23,7 @@ describe('Semantica structured input', () => {
         ],
         relations: [{ id: 'rel-1', source_entity_id: 'entity-a', target_entity_id: 'entity-b', type: 'related', evidence_ids: ['ev-1'] }],
         tour: [{ order: 1, title: 'Start', nodeIds: ['entity-a'], focusNodeIds: ['entity-a'] }],
-      }),
+      }));
       await run('python3', [script, input, output]);
       const graph = JSON.parse(await readFile(output, 'utf8'));
       expect(graph.nodes.map((node) => node.id)).toEqual(['entity-a', 'entity-b']);
