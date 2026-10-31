@@ -157,5 +157,11 @@ export function assembleUnderstanding<N extends { id: string; type: string; labe
       nodeIds: [node.id, ...candidates.slice(0, 7).map(candidate => candidate.id)], sourceIds: [node.sourceId ?? node.id.replace(/^source:/, '')],
       objective: `Read ${node.label ?? node.id} and inspect its source-backed concepts. This is an orientation, not an assessed course.` };
   });
+  for (const lesson of learning) for (const id of lesson.nodeIds) {
+    if (id === lesson.focusId || containment.has(JSON.stringify([lesson.focusId, id]))) continue;
+    containment.add(JSON.stringify([lesson.focusId, id]));
+    edges.push({ id: `ua:source-content:${lesson.focusId}:${id}`, source: lesson.focusId, target: id,
+      type: 'contains', layer: 'knowledge', metadata: { presentationOnly: true, sourceIds: lesson.sourceIds } } as unknown as E);
+  }
   return { nodes, edges, understanding: { protocol: 'understand-anything.scenes.v1' as const, overviewSceneIds: ['overview'], scenes, layers, learning } };
 }
