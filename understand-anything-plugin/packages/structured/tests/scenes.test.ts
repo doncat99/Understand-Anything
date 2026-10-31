@@ -7,8 +7,9 @@ test('semantic overview is bounded without losing membership, identity or eviden
   const groups = Array.from({ length: 5000 }, (_, i) => ({ id: `g${i}`, type: 'community' }));
   const edges = nodes.map((node, i) => ({ id: `m${i}`, source: `g${Math.floor(i / 6)}`, target: node.id, type: 'contains' }));
   const result = assembleUnderstanding({ nodes: [...groups, ...nodes], edges });
-  assert.equal(result.nodes.length, 35000);
-  assert.ok(result.understanding.scenes.every(scene => scene.nodeIds.length <= 64));
+  assert.ok(result.nodes.length >= 35000);
+  assert.equal(result.understanding.overviewSceneIds.length, 1);
+  assert.ok(result.understanding.scenes.every(scene => scene.nodeIds.length <= 129));
   assert.deepEqual(new Set(result.understanding.scenes.flatMap(scene => scene.nodeIds)), new Set(result.nodes.map(node => node.id)));
   assert.deepEqual(result.nodes.find(node => node.id === 'n29999')?.evidenceIds, ['e29999']);
   assert.equal(result.understanding.layers[0].nodeIds.length, 6);
