@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-/** Disk-backed organizer. The caller admits and budgets the immutable input. */
+/** Disk-backed organizer. The caller budgets the immutable input. */
 export interface IndexedDatabase {
   exec(sql: string): unknown;
   prepare(sql: string): { run(...args: unknown[]): unknown; get(...args: unknown[]): unknown; all(...args: unknown[]): unknown[] };
@@ -12,6 +12,8 @@ export interface IndexedSink {
   scene(scope: string, title: string, ids: string[]): void;
   lesson(ordinal: number, lesson: { id: string; title: string; objective: string; focusId: string; nodeIds: string[]; sourceIds: string[] }): void;
   check(): void;
+  /** Host supplies batched writes; SQL-heavy navigation stays in the child. */
+  write?(sql: string, ...args: unknown[]): unknown;
 }
 type Row = Record<string, string | number>;
 
@@ -20,7 +22,7 @@ export function organizeIndexed(db: IndexedDatabase, sink: IndexedSink) {
   const rows = (sql: string, ...args: unknown[]) => db.prepare(sql).all(...args) as Row[];
   const one = (sql: string, ...args: unknown[]) => db.prepare(sql).get(...args) as Row | undefined;
   const count = (sql: string, ...args: unknown[]) => Number(one(sql, ...args)?.n ?? 0);
-  const run = (sql: string, ...args: unknown[]) => db.prepare(sql).run(...args);
+  const run = (sql: string, ...args: unknown[]) => { sink.check(); return sink.write ? sink.write(sql, ...args) : db.prepare(sql).run(...args); };
   function* scan(sql: string, args: unknown[] = []): Generator<Row> {
     let cursor = '';
     while (true) {
@@ -148,34 +150,6 @@ export function organizeIndexed(db: IndexedDatabase, sink: IndexedSink) {
   processScene('', String(overview.title), JSON.parse(String(overview.ids)) as string[]);
   function processScene(scope: string, title: string, ids: string[]) {
     sink.check(); sink.scene(scope, title, ids);
-    run('DELETE FROM ua_frontier'); run('DELETE FROM ua_visible'); run('DELETE FROM ua_aggregates');
-    for (const id of ids) if (id !== scope) run('INSERT INTO ua_visible VALUES(?)', id);
-    for (const id of ids) if (id !== scope) {
-      run(`WITH RECURSIVE descendants(id) AS (VALUES(?) UNION SELECT m.child FROM ua_navigation m JOIN descendants d ON m.parent=d.id
-        WHERE NOT EXISTS(SELECT 1 FROM ua_visible v WHERE v.id=m.child) AND m.child<>?)
-        INSERT OR IGNORE INTO ua_frontier SELECT id,? FROM descendants`, id, scope, id);
-      if (scope) sink.edge({ id: `ua:contains:${scope}:${id}`, source: scope, target: id, type: 'contains', layer: 'knowledge', metadata: { presentationOnly: true } });
-    }
-    run(`INSERT OR IGNORE INTO ua_aggregates SELECT a.representative,b.representative,f.type,
-      coalesce(json_extract(f.json,'$.metadata.direction'),'forward'),f.id
-      FROM ua_frontier a JOIN ua_facts f ON f.source=a.node JOIN ua_frontier b ON b.node=f.target
-      WHERE a.representative<>b.representative AND (a.representative<>f.source OR b.representative<>f.target)`);
-    let last = '';
-    while (true) {
-      sink.check();
-      const links = rows(`SELECT json_array(source,target,type,direction) AS id,source,target,type,direction,count(*) AS n
-        FROM ua_aggregates WHERE json_array(source,target,type,direction)>?
-        GROUP BY source,target,type,direction ORDER BY id LIMIT 128`, last);
-      if (!links.length) break;
-      for (const link of links) {
-        const aggregate = `ua:relation:${createHash('sha256').update(JSON.stringify([scope ? `group:${scope}` : 'overview', link.source, link.target, link.type, link.direction])).digest('hex')}`;
-        const preview = rows('SELECT relation FROM ua_aggregates WHERE source=? AND target=? AND type=? AND direction=? ORDER BY relation LIMIT 16', link.source, link.target, link.type, link.direction).map(row => String(row.relation));
-        sink.edge({ id: aggregate, source: link.source, target: link.target, type: 'group_relation', layer: 'knowledge', label: `${link.n} ${String(link.type).replaceAll('_', ' ')}`,
-          metadata: { presentationOnly: true, sceneId: scope ? `group:${scope}` : 'overview', direction: link.direction, relationType: link.type, relationCount: link.n, relationIds: preview, relationReference: aggregate } });
-        for (const ref of scan('SELECT relation AS id FROM ua_aggregates WHERE source=? AND target=? AND type=? AND direction=? AND relation>? ORDER BY relation LIMIT 128', [link.source, link.target, link.type, link.direction])) sink.reference(aggregate, String(ref.id));
-      }
-      last = String(links[links.length - 1]!.id);
-    }
     if (scope.startsWith('source:')) return;
     const knowledge = ids.filter(id => one("SELECT 1 FROM ua_nodes WHERE id=? AND type IN ('concept','claim','entity','question','formula')", id));
     if (!knowledge.length) return;
@@ -188,6 +162,9 @@ export function organizeIndexed(db: IndexedDatabase, sink: IndexedSink) {
     for (const id of knowledge) run('INSERT OR IGNORE INTO ua_planned VALUES(?)', id);
     for (const source of sources) run('INSERT OR IGNORE INTO ua_covered VALUES(?)', source);
   }
+  // Only Overview relationships belong to the initial publication. The full
+  // navigation and reading catalog above remain complete and independently usable.
+  organizeIndexedScene(db, sink, '');
   // Union-find lives on disk too; metrics do not need an eager adjacency graph.
   db.exec("CREATE TABLE ua_components(id TEXT PRIMARY KEY,parent TEXT,rank INTEGER); INSERT INTO ua_components SELECT id,id,0 FROM ua_nodes WHERE type='concept'");
   const root = (id: string): { id: string; rank: number } | undefined => {
@@ -217,4 +194,53 @@ export function organizeIndexed(db: IndexedDatabase, sink: IndexedSink) {
       sourceCount: count("SELECT count(*) n FROM ua_nodes WHERE type='source'"), coveredSourceCount: count('SELECT count(*) n FROM ua_covered'),
       plannedKnowledgeNodeCount: count('SELECT count(*) n FROM ua_planned'),
       unclusteredNodeCount: count("SELECT count(*) n FROM ua_nodes n WHERE type='concept' AND NOT EXISTS(SELECT 1 FROM ua_planned p WHERE p.id=n.id)") } };
+}
+
+/** Expand one catalog scene. Call in a cancellable child, with atomic cache publication. */
+export function organizeIndexedScene(db: IndexedDatabase, sink: Pick<IndexedSink, 'edge' | 'reference' | 'check' | 'write'>, scope: string) {
+  const rows = (sql: string, ...args: unknown[]) => db.prepare(sql).all(...args) as Row[];
+  const run = (sql: string, ...args: unknown[]) => { sink.check(); return sink.write ? sink.write(sql, ...args) : db.prepare(sql).run(...args); };
+  const scene = db.prepare('SELECT ids FROM ua_scenes WHERE id=?').get(scope) as { ids: string } | undefined;
+  if (!scene) throw new Error('UA scene is not in this catalog.');
+  const ids = JSON.parse(scene.ids) as string[];
+  const sceneId = scope ? `group:${scope}` : 'overview';
+  run('DELETE FROM ua_frontier'); run('DELETE FROM ua_visible'); run('DELETE FROM ua_aggregates');
+  for (const id of ids) if (id !== scope) run('INSERT INTO ua_visible VALUES(?)', id);
+  for (const id of ids) if (id !== scope) {
+    run(`WITH RECURSIVE descendants(id) AS (VALUES(?) UNION SELECT m.child FROM ua_navigation m JOIN descendants d ON m.parent=d.id
+      WHERE NOT EXISTS(SELECT 1 FROM ua_visible v WHERE v.id=m.child) AND m.child<>?)
+      INSERT OR IGNORE INTO ua_frontier SELECT id,? FROM descendants`, id, scope, id);
+    if (scope) sink.edge({ id: `ua:contains:${scope}:${id}`, source: scope, target: id, type: 'contains', layer: 'knowledge', metadata: { presentationOnly: true, sceneId } });
+  }
+  run(`INSERT OR IGNORE INTO ua_aggregates SELECT a.representative,b.representative,f.type,
+    coalesce(json_extract(f.json,'$.metadata.direction'),'forward'),f.id
+    FROM ua_frontier a JOIN ua_facts f ON f.source=a.node JOIN ua_frontier b ON b.node=f.target
+    WHERE a.representative<>b.representative AND (a.representative<>f.source OR b.representative<>f.target)`);
+  // Aggregate once. Paginating an expression over GROUP BY repeated the entire
+  // aggregation for every page. A disk table gives the continuation an index.
+  db.exec('DROP TABLE IF EXISTS ua_links; CREATE TABLE ua_links(source TEXT,target TEXT,type TEXT,direction TEXT,n INTEGER,PRIMARY KEY(source,target,type,direction))');
+  run('INSERT INTO ua_links SELECT source,target,type,direction,count(*) FROM ua_aggregates GROUP BY source,target,type,direction');
+  let cursor = ['', '', '', ''];
+  for (;;) {
+    sink.check();
+    const links = rows('SELECT * FROM ua_links WHERE (source,target,type,direction)>(?,?,?,?) ORDER BY source,target,type,direction LIMIT 128', ...cursor);
+    if (!links.length) break;
+    for (const link of links) {
+      const aggregate = `ua:relation:${createHash('sha256').update(JSON.stringify([sceneId,link.source,link.target,link.type,link.direction])).digest('hex')}`;
+      const args = [link.source,link.target,link.type,link.direction];
+      const preview = rows('SELECT relation FROM ua_aggregates WHERE source=? AND target=? AND type=? AND direction=? ORDER BY relation LIMIT 16', ...args).map(r => String(r.relation));
+      sink.edge({ id: aggregate,source:link.source,target:link.target,type:'group_relation',layer:'knowledge',label:`${link.n} ${String(link.type).replaceAll('_',' ')}`,
+        metadata: { presentationOnly:true,sceneId,direction:link.direction,relationType:link.type,relationCount:link.n,relationIds:preview,relationReference:aggregate } });
+      let last = '';
+      for (;;) {
+        sink.check();
+        const refs = rows('SELECT relation FROM ua_aggregates WHERE source=? AND target=? AND type=? AND direction=? AND relation>? ORDER BY relation LIMIT 128', ...args,last);
+        if (!refs.length) break;
+        for (const ref of refs) sink.reference(aggregate,String(ref.relation));
+        last = String(refs.at(-1)!.relation);
+      }
+    }
+    const end = links.at(-1)!;
+    cursor = [end.source,end.target,end.type,end.direction].map(String);
+  }
 }

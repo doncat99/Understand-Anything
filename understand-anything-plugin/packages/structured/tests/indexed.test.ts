@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { organizeIndexed } from '../src/indexed.ts';
+import { organizeIndexed, organizeIndexedScene } from '../src/indexed.ts';
 
 function fixture() {
   const db = new DatabaseSync(':memory:');
@@ -56,4 +56,17 @@ test('exactly equivalent groups share one overview entry and source scenes use c
   assert.deepEqual(f.scenes.get('topic'),['topic','a','community']);
   assert.deepEqual(f.scenes.get('source:card'),['source:card','a']);
   assert.equal(f.lessons.length,1); f.db.close();
+});
+
+test('catalog construction defers non-overview relationship expansion until that scene is requested', () => {
+  const f = fixture(); f.node('theme','topic'); f.node('a'); f.node('b');
+  f.member('theme','a'); f.member('theme','b'); f.fact('r','a','b');
+  organizeIndexed(f.db as any, f.sink);
+  assert.ok(f.scenes.has('theme'));
+  assert.equal(f.edges.filter(e => e.metadata?.sceneId === 'group:theme').length, 0);
+  organizeIndexedScene(f.db as any, f.sink, 'theme');
+  assert.equal(f.edges.filter(e => e.type === 'contains' && e.metadata?.sceneId === 'group:theme').length, 2);
+  // Direct facts remain canonical and are read by endpoint; no fabricated aggregate.
+  assert.equal(f.edges.filter(e => e.type === 'group_relation').length, 0);
+  f.db.close();
 });
