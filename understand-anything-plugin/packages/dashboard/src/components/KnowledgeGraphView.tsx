@@ -315,7 +315,7 @@ function KnowledgeGraphViewInner({ onDrillIn }: { onDrillIn?: (id: string) => vo
     });
 
     const activeId = focusNodeId ?? selectedNodeId;
-    const rfEdges: Edge[] = filteredGraph.edges.map((e) => {
+    const rfEdges: Edge[] = filteredGraph.edges.map((e, index) => {
       const baseStyle = EDGE_STYLES[e.type] ?? EDGE_STYLES.related;
       const isConnected = activeId && (e.source === activeId || e.target === activeId);
 
@@ -336,7 +336,7 @@ function KnowledgeGraphViewInner({ onDrillIn }: { onDrillIn?: (id: string) => vo
       }
 
       return {
-        id: `ke-${e.source}-${e.target}-${e.type}`,
+        id: e.id ?? `ke-${e.source}-${e.target}-${e.type}-${index}`,
         source: e.source,
         target: e.target,
         style,

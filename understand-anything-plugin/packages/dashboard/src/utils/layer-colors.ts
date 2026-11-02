@@ -9,5 +9,5 @@ export const LAYER_PALETTE = [
 ];
 
 export function getLayerColor(index: number) {
-  return LAYER_PALETTE[index % LAYER_PALETTE.length];
+  return LAYER_PALETTE[index % LAYER_PALETTE.length]!;
 }

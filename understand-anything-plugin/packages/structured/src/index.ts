@@ -62,9 +62,17 @@ export function assembleUnderstanding<N extends { id: string; type: string; labe
     }
   };
   const owner = new Map<string, Set<string>>();
-  for (const id of canonical) for (const member of groups.get(id)!) {
-    const owners = owner.get(member) ?? new Set<string>();
-    owners.add(id); owner.set(member, owners);
+  for (const id of canonical) {
+    const visited = new Set([id]);
+    const queue = [...groups.get(id)!];
+    for (let cursor = 0; cursor < queue.length; cursor++) {
+      const member = queue[cursor]!;
+      if (visited.has(member)) continue;
+      visited.add(member);
+      const owners = owner.get(member) ?? new Set<string>();
+      owners.add(id); owner.set(member, owners);
+      for (const child of groups.get(member) ?? []) queue.push(child);
+    }
   }
   aggregate(owner, input.edges);
 
@@ -168,13 +176,13 @@ export function assembleUnderstanding<N extends { id: string; type: string; labe
   // Guided reading follows complete leaf scenes and canonical provenance. No
   // arbitrary concept samples, inferred prerequisites or invented time estimates.
   const sourceNodeIds = new Set(sources.map(source => source.id));
-  const learning = scenes.filter(scene => !sourceNodeIds.has(scene.groupId ?? '')
-    && !scene.nodeIds.some(id => id !== scene.groupId && expandable.has(id))).flatMap(scene => {
-    const knowledge = scene.nodeIds.map(id => byId.get(id)!).filter(node => ['concept', 'claim', 'entity', 'question', 'formula'].includes(node.type));
+  const learning = scenes.filter(scene => !sourceNodeIds.has(scene.groupId ?? '')).flatMap(scene => {
+    const nodeIds = scene.nodeIds.filter(id => id === scene.groupId || !expandable.has(id));
+    const knowledge = nodeIds.map(id => byId.get(id)!).filter(node => ['concept', 'claim', 'entity', 'question', 'formula'].includes(node.type));
     const sourceIds = [...new Set(knowledge.flatMap(sourceIdsFor))];
     if (!knowledge.length || !sourceIds.length) return [];
     const focusId = scene.groupId ?? knowledge[0]!.id;
-    return [{ id: `reading:${scene.id}`, title: scene.title, focusId, nodeIds: scene.nodeIds, sourceIds,
+    return [{ id: `reading:${scene.id}`, title: scene.title, focusId, nodeIds, sourceIds,
       objective: `Explore ${scene.title}: inspect the concepts, their recorded relationships and source evidence. Guided reading; no prerequisite or mastery assessment has been inferred.` }];
   });
   for (const node of sources) sceneFor([...(bySource.get(node.id) ?? [])], node.label ?? node.id, node.id);
