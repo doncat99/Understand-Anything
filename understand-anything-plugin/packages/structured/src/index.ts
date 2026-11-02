@@ -40,24 +40,42 @@ export function assembleUnderstanding<N extends { id: string; type: string; labe
     adjacency.get(a)!.add(b); adjacency.get(b)!.add(a);
   };
   input.edges.forEach(edge => connect(edge.source, edge.target));
-  const aggregate = (owner: Map<string, Set<string>>, candidates: E[]) => {
-    const links = new Map<string, { source: string; target: string; relationType: string; relationIds: string[] }>();
-    for (const [index, edge] of candidates.entries()) {
+  const relationReferences: { aggregateId: string; relationId: string }[] = [];
+  const incident = new Map<string, number[]>();
+  input.edges.forEach((edge, index) => {
+    if (edge.type === 'contains') return;
+    for (const id of new Set([edge.source, edge.target])) {
+      const list = incident.get(id) ?? [];
+      list.push(index); incident.set(id, list);
+    }
+  });
+  const aggregate = (scene: UnderstandingScene, owner: Map<string, Set<string>>) => {
+    const links = new Map<string, { source: string; target: string; relationType: string; relationIds: Set<string> }>();
+    const candidates = new Set<number>();
+    for (const id of owner.keys()) for (const index of incident.get(id) ?? []) candidates.add(index);
+    for (const index of candidates) {
+      const edge = input.edges[index]!;
       if (edge.type === 'contains') continue;
       for (const source of owner.get(edge.source) ?? []) for (const target of owner.get(edge.target) ?? []) {
       if (source === target) continue;
+      // A direct fact is already visible. Do not add a second synthetic copy.
+      if (source === edge.source && target === edge.target) continue;
       const relationType = String((edge as E & { metadata?: { relationType?: string } }).metadata?.relationType ?? edge.type);
       const key = JSON.stringify([source, target, relationType]);
-      const link = links.get(key) ?? { source, target, relationType, relationIds: [] };
-      const priorIds = (edge as E & { metadata?: { relationIds?: string[] } }).metadata?.relationIds;
-      link.relationIds.push(...(priorIds ?? [edge.id ?? `${edge.source}:${edge.type}:${edge.target}:${index}`]));
+      const link = links.get(key) ?? { source, target, relationType, relationIds: new Set<string>() };
+      link.relationIds.add(edge.id ?? `${edge.source}:${edge.type}:${edge.target}:${index}`);
       links.set(key, link);
       }
     }
     for (const link of links.values()) {
-      link.relationIds = [...new Set(link.relationIds)];
-      edges.push({ id: `ua:relation:${JSON.stringify([link.source, link.target, link.relationType])}`, source: link.source, target: link.target, type: 'group_relation', layer: 'knowledge',
-        label: `${link.relationIds.length} ${link.relationType.replaceAll('_', ' ')}`, metadata: { presentationOnly: true, relationType: link.relationType, relationCount: link.relationIds.length, relationIds: link.relationIds } } as unknown as E);
+      const id = `ua:relation:${JSON.stringify([scene.id, link.source, link.target, link.relationType])}`;
+      const preview: string[] = [];
+      for (const relationId of link.relationIds) {
+        relationReferences.push({ aggregateId: id, relationId });
+        if (preview.length < 16) preview.push(relationId);
+      }
+      edges.push({ id, source: link.source, target: link.target, type: 'group_relation', layer: 'knowledge',
+        label: `${link.relationIds.size} ${link.relationType.replaceAll('_', ' ')}`, metadata: { presentationOnly: true, sceneId: scene.id, relationType: link.relationType, relationCount: link.relationIds.size, relationIds: preview, relationReference: id } } as unknown as E);
       connect(link.source, link.target);
     }
   };
@@ -74,7 +92,6 @@ export function assembleUnderstanding<N extends { id: string; type: string; labe
       for (const child of groups.get(member) ?? []) queue.push(child);
     }
   }
-  aggregate(owner, input.edges);
 
   // This is a render granularity, not a corpus limit: every member has a child
   // scene and every overview has exactly one root. No knowledge is sampled away.
@@ -86,7 +103,6 @@ export function assembleUnderstanding<N extends { id: string; type: string; labe
       const remaining = new Set(ids);
       const childSize = Math.ceil(Math.sqrt(ids.length));
       const children: string[] = [];
-      const parentByMember = new Map<string, Set<string>>();
       while (remaining.size) {
         const seed = remaining.values().next().value!;
         const queue = [seed]; remaining.delete(seed);
@@ -110,10 +126,9 @@ export function assembleUnderstanding<N extends { id: string; type: string; labe
         const node = { id, type: 'topic', label: `${label} (${members.length} items)`, layer: 'knowledge',
           metadata: { presentationOnly: true, understandingGroup: { kind: 'collection', memberCount: members.length }, memberCount: members.length, content: 'Navigation collection. Expand to inspect its contents; this grouping does not assert a semantic relationship.' } } as unknown as N;
         nodes.push(node); byId.set(id, node); children.push(id);
-        members.forEach(member => parentByMember.set(member, new Set([id])));
+        groups.set(id, new Set(members));
         sceneFor(members, node.label!, id);
       }
-      aggregate(parentByMember, [...edges]);
       ids = children;
       // Very large inputs can require more than one navigation level.
       if (ids.length > detailCapacity) { sceneFor(ids, title, groupId); return; }
@@ -186,5 +201,23 @@ export function assembleUnderstanding<N extends { id: string; type: string; labe
       objective: `Explore ${scene.title}: inspect the concepts, their recorded relationships and source evidence. Guided reading; no prerequisite or mastery assessment has been inferred.` }];
   });
   for (const node of sources) sceneFor([...(bySource.get(node.id) ?? [])], node.label ?? node.id, node.id);
-  return { nodes, edges, understanding: { protocol: 'understand-anything.scenes.v1' as const, overviewSceneIds: ['overview'], scenes, layers, learning } };
+  for (const scene of scenes) {
+    const visible = new Set(scene.nodeIds.filter(id => id !== scene.groupId));
+    const frontier = new Map<string, Set<string>>();
+    for (const id of visible) frontier.set(id, new Set([id]));
+    for (const id of visible) {
+      const visited = new Set([id]);
+      const queue = [...(groups.get(id) ?? [])];
+      for (let cursor = 0; cursor < queue.length; cursor++) {
+        const member = queue[cursor]!;
+        if (visited.has(member) || visible.has(member) || member === scene.groupId) continue;
+        visited.add(member);
+        const representatives = frontier.get(member) ?? new Set<string>();
+        representatives.add(id); frontier.set(member, representatives);
+        for (const child of groups.get(member) ?? []) queue.push(child);
+      }
+    }
+    aggregate(scene, frontier);
+  }
+  return { nodes, edges, relationReferences, understanding: { protocol: 'understand-anything.scenes.v1' as const, overviewSceneIds: ['overview'], scenes, layers, learning } };
 }
