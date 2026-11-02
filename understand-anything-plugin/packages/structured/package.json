@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "license": "MIT",
-  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }, "./indexed": { "types": "./dist/indexed.d.ts", "default": "./dist/indexed.js" } },
   "files": ["dist", "src"],
   "scripts": { "build": "tsc -p tsconfig.json", "test": "node --experimental-strip-types --test tests/*.test.ts" }
 }
