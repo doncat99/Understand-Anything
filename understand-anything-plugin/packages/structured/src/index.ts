@@ -10,6 +10,7 @@ export interface UnderstandingPresentation {
 /** Organize canonical facts into bounded reading scenes, without inferring new facts. */
 export function assembleUnderstanding<N extends { id: string; type: string; label?: string; sourceId?: string; metadata?: Record<string, unknown> }, E extends { id?: string; source: string; target: string; type: string }>(input: { nodes: N[]; edges: E[] }) {
   const byId = new Map(input.nodes.map(node => [node.id, node]));
+  const nodeIndex = new Map(input.nodes.map((node, index) => [node.id, index]));
   const groups = new Map(input.nodes.filter(node => ['community', 'topic', 'cluster'].includes(node.type)).map(node => [node.id, new Set<string>()]));
   for (const edge of input.edges) if (edge.type === 'contains' && groups.has(edge.source) && byId.has(edge.target)) groups.get(edge.source)!.add(edge.target);
   const equivalent = new Map<string, string>();
@@ -39,25 +40,32 @@ export function assembleUnderstanding<N extends { id: string; type: string; labe
     adjacency.get(a)!.add(b); adjacency.get(b)!.add(a);
   };
   input.edges.forEach(edge => connect(edge.source, edge.target));
-  const aggregate = (owner: Map<string, string>, candidates: E[]) => {
-    const links = new Map<string, { source: string; target: string; relationIds: string[] }>();
+  const aggregate = (owner: Map<string, Set<string>>, candidates: E[]) => {
+    const links = new Map<string, { source: string; target: string; relationType: string; relationIds: string[] }>();
     for (const [index, edge] of candidates.entries()) {
       if (edge.type === 'contains') continue;
-      const source = owner.get(edge.source); const target = owner.get(edge.target);
-      if (!source || !target || source === target) continue;
-      const key = JSON.stringify([source, target]);
-      const link = links.get(key) ?? { source, target, relationIds: [] };
-      link.relationIds.push(edge.id ?? `${edge.source}:${edge.type}:${edge.target}:${index}`);
+      for (const source of owner.get(edge.source) ?? []) for (const target of owner.get(edge.target) ?? []) {
+      if (source === target) continue;
+      const relationType = String((edge as E & { metadata?: { relationType?: string } }).metadata?.relationType ?? edge.type);
+      const key = JSON.stringify([source, target, relationType]);
+      const link = links.get(key) ?? { source, target, relationType, relationIds: [] };
+      const priorIds = (edge as E & { metadata?: { relationIds?: string[] } }).metadata?.relationIds;
+      link.relationIds.push(...(priorIds ?? [edge.id ?? `${edge.source}:${edge.type}:${edge.target}:${index}`]));
       links.set(key, link);
+      }
     }
     for (const link of links.values()) {
-      edges.push({ id: `ua:relation:${JSON.stringify([link.source, link.target])}`, ...link, type: 'group_relation', layer: 'knowledge',
-        label: `${link.relationIds.length} underlying relations`, metadata: { presentationOnly: true, relationIds: link.relationIds } } as unknown as E);
+      link.relationIds = [...new Set(link.relationIds)];
+      edges.push({ id: `ua:relation:${JSON.stringify([link.source, link.target, link.relationType])}`, source: link.source, target: link.target, type: 'group_relation', layer: 'knowledge',
+        label: `${link.relationIds.length} ${link.relationType.replaceAll('_', ' ')}`, metadata: { presentationOnly: true, relationType: link.relationType, relationCount: link.relationIds.length, relationIds: link.relationIds } } as unknown as E);
       connect(link.source, link.target);
     }
   };
-  const owner = new Map<string, string>();
-  for (const id of canonical) for (const member of groups.get(id)!) if (!owner.has(member)) owner.set(member, id);
+  const owner = new Map<string, Set<string>>();
+  for (const id of canonical) for (const member of groups.get(id)!) {
+    const owners = owner.get(member) ?? new Set<string>();
+    owners.add(id); owner.set(member, owners);
+  }
   aggregate(owner, input.edges);
 
   // This is a render granularity, not a corpus limit: every member has a child
@@ -70,7 +78,7 @@ export function assembleUnderstanding<N extends { id: string; type: string; labe
       const remaining = new Set(ids);
       const childSize = Math.ceil(Math.sqrt(ids.length));
       const children: string[] = [];
-      const parentByMember = new Map<string, string>();
+      const parentByMember = new Map<string, Set<string>>();
       while (remaining.size) {
         const seed = remaining.values().next().value!;
         const queue = [seed]; remaining.delete(seed);
@@ -92,9 +100,9 @@ export function assembleUnderstanding<N extends { id: string; type: string; labe
         const id = `ua:collection:${collectionId++}`;
         const label = members.slice(0, 2).map(member => byId.get(member)?.label ?? member).join(' / ');
         const node = { id, type: 'topic', label: `${label} (${members.length} items)`, layer: 'knowledge',
-          metadata: { presentationOnly: true, memberCount: members.length, content: 'Navigation collection. Expand to inspect its contents; this grouping does not assert a semantic relationship.' } } as unknown as N;
+          metadata: { presentationOnly: true, understandingGroup: { kind: 'collection', memberCount: members.length }, memberCount: members.length, content: 'Navigation collection. Expand to inspect its contents; this grouping does not assert a semantic relationship.' } } as unknown as N;
         nodes.push(node); byId.set(id, node); children.push(id);
-        members.forEach(member => parentByMember.set(member, id));
+        members.forEach(member => parentByMember.set(member, new Set([id])));
         sceneFor(members, node.label!, id);
       }
       aggregate(parentByMember, [...edges]);
@@ -115,6 +123,10 @@ export function assembleUnderstanding<N extends { id: string; type: string; labe
   for (const id of canonical) {
     const members = [...groups.get(id)!];
     const name = byId.get(id)?.label ?? id;
+    const original = byId.get(id)!;
+    const enriched = { ...original, metadata: { ...original.metadata, understandingGroup: { kind: 'theme', memberCount: members.length } } };
+    nodes[nodeIndex.get(id)!] = enriched;
+    byId.set(id, enriched);
     layers.push({ id, name, description: name, nodeIds: members });
     sceneFor([...members, ...(aliases.get(id) ?? [])], name, id);
   }
@@ -128,40 +140,43 @@ export function assembleUnderstanding<N extends { id: string; type: string; labe
       const sourceNode = sourceNodes.get(source);
       if (!sourceNode) continue;
       const members = bySource.get(sourceNode) ?? new Set<string>();
-      members.add(owner.get(node.id) ?? node.id); bySource.set(sourceNode, members);
+      for (const id of owner.get(node.id) ?? [node.id]) members.add(id);
+      bySource.set(sourceNode, members);
     }
   }
-  for (const node of sources) sceneFor([...(bySource.get(node.id) ?? [])], node.label ?? node.id, node.id);
   const grouped = new Set([...groups.values()].flatMap(values => [...values]));
   const canonicalIds = new Set(canonical);
   const groupAliases = new Set([...aliases.values()].flat());
   const ungrouped = input.nodes.filter(node => !grouped.has(node.id) && !canonicalIds.has(node.id) && !groupAliases.has(node.id) && node.type !== 'source');
-  if (sources.length) {
-    const withoutSource = ungrouped.filter(node => !sourceIdsFor(node).some(source => sourceNodes.has(source)));
-    const sourced = new Set([...bySource.values()].flatMap(values => [...values]));
-    sceneFor([...sources.map(node => node.id), ...canonical.filter(id => !sourced.has(id)), ...withoutSource.map(node => node.id)], 'Overview');
-  } else sceneFor([...canonical, ...ungrouped.map(node => node.id)], 'Overview');
-  // Introductory reading is document-sized, not one mandatory lesson per entity.
-  // Each scene retains canonical nodes and links; this is not model-authored teaching.
-  const conceptsBySource = new Map<string, N[]>();
-  for (const candidate of input.nodes) if (candidate.type === 'concept') for (const source of sourceIdsFor(candidate)) {
-    const sourceNode = sourceNodes.get(source);
-    if (!sourceNode) continue;
-    const candidates = conceptsBySource.get(sourceNode) ?? [];
-    candidates.push(candidate); conceptsBySource.set(sourceNode, candidates);
-  }
-  const learning = sources.map(node => {
-    const candidates = conceptsBySource.get(node.id) ?? [];
-    candidates.sort((a, b) => (adjacency.get(b.id)?.size ?? 0) - (adjacency.get(a.id)?.size ?? 0) || a.id.localeCompare(b.id));
-    return { id: `orientation:${node.id}`, title: node.label ?? node.id, focusId: node.id,
-      nodeIds: [node.id, ...candidates.slice(0, 7).map(candidate => candidate.id)], sourceIds: [node.sourceId ?? node.id.replace(/^source:/, '')],
-      objective: `Read ${node.label ?? node.id} and inspect its source-backed concepts. This is an orientation, not an assessed course.` };
+  const nested = new Set(canonical.flatMap(id => [...groups.get(id)!].filter(member => canonicalIds.has(member) && member !== id)));
+  const roots = canonical.filter(id => !nested.has(id));
+  // Include a representative of every disconnected cyclic component as well.
+  const reachable = new Set<string>();
+  const visit = (id: string) => {
+    const queue = [id];
+    for (let i = 0; i < queue.length; i++) {
+      const next = queue[i]!;
+      if (reachable.has(next)) continue;
+      reachable.add(next);
+      for (const child of groups.get(next) ?? []) if (canonicalIds.has(child)) queue.push(child);
+    }
+  };
+  roots.forEach(visit);
+  for (const id of canonical) if (!reachable.has(id)) { roots.push(id); visit(id); }
+  sceneFor([...roots, ...ungrouped.map(node => node.id)], 'Overview');
+  const expandable = new Set(scenes.map(scene => scene.groupId).filter(Boolean));
+  // Guided reading follows complete leaf scenes and canonical provenance. No
+  // arbitrary concept samples, inferred prerequisites or invented time estimates.
+  const sourceNodeIds = new Set(sources.map(source => source.id));
+  const learning = scenes.filter(scene => !sourceNodeIds.has(scene.groupId ?? '')
+    && !scene.nodeIds.some(id => id !== scene.groupId && expandable.has(id))).flatMap(scene => {
+    const knowledge = scene.nodeIds.map(id => byId.get(id)!).filter(node => ['concept', 'claim', 'entity', 'question', 'formula'].includes(node.type));
+    const sourceIds = [...new Set(knowledge.flatMap(sourceIdsFor))];
+    if (!knowledge.length || !sourceIds.length) return [];
+    const focusId = scene.groupId ?? knowledge[0]!.id;
+    return [{ id: `reading:${scene.id}`, title: scene.title, focusId, nodeIds: scene.nodeIds, sourceIds,
+      objective: `Explore ${scene.title}: inspect the concepts, their recorded relationships and source evidence. Guided reading; no prerequisite or mastery assessment has been inferred.` }];
   });
-  for (const lesson of learning) for (const id of lesson.nodeIds) {
-    if (id === lesson.focusId || containment.has(JSON.stringify([lesson.focusId, id]))) continue;
-    containment.add(JSON.stringify([lesson.focusId, id]));
-    edges.push({ id: `ua:source-content:${lesson.focusId}:${id}`, source: lesson.focusId, target: id,
-      type: 'contains', layer: 'knowledge', metadata: { presentationOnly: true, sourceIds: lesson.sourceIds } } as unknown as E);
-  }
+  for (const node of sources) sceneFor([...(bySource.get(node.id) ?? [])], node.label ?? node.id, node.id);
   return { nodes, edges, understanding: { protocol: 'understand-anything.scenes.v1' as const, overviewSceneIds: ['overview'], scenes, layers, learning } };
 }

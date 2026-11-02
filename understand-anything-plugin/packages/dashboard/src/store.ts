@@ -33,7 +33,7 @@ export const EDGE_CATEGORY_MAP: Record<EdgeCategory, string[]> = {
   behavioral: ["calls", "subscribes", "publishes", "middleware"],
   "data-flow": ["reads_from", "writes_to", "transforms", "validates"],
   dependencies: ["depends_on", "tested_by", "configures"],
-  semantic: ["related", "similar_to"],
+  semantic: ["related", "similar_to", "group_relation"],
   infrastructure: ["deploys", "serves", "provisions", "triggers", "migrates", "documents", "routes", "defines_schema"],
   domain: ["contains_flow", "flow_step", "cross_domain"],
   knowledge: ["cites", "contradicts", "builds_on", "exemplifies", "categorized_under", "authored_by"],
@@ -794,4 +794,3 @@ export const useDashboardStore = create<DashboardStore>()((set, get) => ({
     }),
   clearLayoutIssues: () => set({ layoutIssues: [] }),
 }));
-

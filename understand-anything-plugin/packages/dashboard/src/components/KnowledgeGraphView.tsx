@@ -11,6 +11,7 @@ import type { Edge, Node } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
 import CustomNode from "./CustomNode";
+import LayerClusterNode from "./LayerClusterNode";
 import type { CustomNodeData } from "./CustomNode";
 import { useDashboardStore } from "../store";
 import { NODE_WIDTH, NODE_HEIGHT } from "../utils/layout";
@@ -29,6 +30,7 @@ import type { KnowledgeGraph } from "@understand-anything/core/types";
 
 const nodeTypes = {
   custom: CustomNode,
+  "layer-cluster": LayerClusterNode,
 };
 
 const EMPTY_POSITION_MAP = new Map<string, { x: number; y: number }>();
@@ -36,6 +38,7 @@ const EMPTY_EDGE_COUNTS = new Map<string, number>();
 
 /** Edge style presets by knowledge edge type. */
 const EDGE_STYLES: Record<string, React.CSSProperties> = {
+  group_relation: { stroke: "var(--color-node-topic)", strokeWidth: 1.5, opacity: 0.8 },
   related: { stroke: "var(--color-border-medium)", strokeWidth: 0.5, opacity: 0.12 },
   cites: { stroke: "var(--color-node-source)", strokeWidth: 1.5, strokeDasharray: "6 3" },
   contradicts: { stroke: "#c97070", strokeWidth: 2 },
@@ -99,7 +102,7 @@ function prepareLayout(graph: KnowledgeGraph): PreparedLayout {
     edgeCounts,
     nodes: graph.nodes.map((node) => ({
       id: node.id,
-      ...getNodeDimensions(edgeCounts.get(node.id) ?? 0),
+      ...(node.knowledgeMeta?.understandingGroup ? { width: 300, height: 180 } : getNodeDimensions(edgeCounts.get(node.id) ?? 0)),
       community: communityMap.get(node.id),
     })),
     edges: graph.edges.map((edge) => ({
@@ -116,7 +119,7 @@ function createForceLayoutWorker(): Worker {
   );
 }
 
-function KnowledgeGraphViewInner() {
+function KnowledgeGraphViewInner({ onDrillIn }: { onDrillIn?: (id: string) => void }) {
   const graph = useDashboardStore((s) => s.graph);
   const selectedNodeId = useDashboardStore((s) => s.selectedNodeId);
   const focusNodeId = useDashboardStore((s) => s.focusNodeId);
@@ -264,6 +267,14 @@ function KnowledgeGraphViewInner() {
     }
 
     const rfNodes: Node[] = filteredGraph.nodes.map((node) => {
+      const group = node.knowledgeMeta?.understandingGroup;
+      if (group) return {
+        id: node.id, type: "layer-cluster", position: positionMap.get(node.id) ?? { x: 0, y: 0 },
+        data: { layerId: node.id, layerName: node.name, layerDescription: node.summary,
+          fileCount: group.memberCount, itemLabel: "items", kindLabel: group.kind === 'theme' ? 'Theme' : 'Navigation collection',
+          aggregateComplexity: '', layerColorIndex: filteredGraph.nodes.indexOf(node),
+          onDrillIn: onDrillIn ?? onNodeClick },
+      };
       const isSelected = node.id === selectedNodeId;
       const isFocused = node.id === focusNodeId;
       const isNeighbor = neighborIds.has(node.id);
@@ -330,8 +341,8 @@ function KnowledgeGraphViewInner() {
         target: e.target,
         style,
         animated: e.type === "contradicts" && (!activeId || !!isConnected),
-        label: isConnected && e.type !== "related" && e.type !== "categorized_under"
-          ? e.type.replace(/_/g, " ")
+        label: (e.type === "group_relation" || isConnected) && e.type !== "related" && e.type !== "categorized_under"
+          ? (e.description || e.type.replace(/_/g, " "))
           : undefined,
         labelStyle: { fill: "var(--color-text-muted)", fontSize: 9, opacity: 0.7 },
         labelBgStyle: { fill: "var(--color-surface)", fillOpacity: 0.9 },
@@ -341,7 +352,7 @@ function KnowledgeGraphViewInner() {
     });
 
     return { nodes: rfNodes, edges: rfEdges };
-  }, [filteredGraph, layoutIsReady, selectedNodeId, focusNodeId, searchResults, tourSet, onNodeClick, positionMap, edgeCounts]);
+  }, [filteredGraph, layoutIsReady, selectedNodeId, focusNodeId, searchResults, tourSet, onNodeClick, onDrillIn, positionMap, edgeCounts]);
 
   if (!graph) {
     return (
@@ -411,10 +422,10 @@ function KnowledgeGraphViewInner() {
   );
 }
 
-export default function KnowledgeGraphView() {
+export default function KnowledgeGraphView({ onDrillIn }: { onDrillIn?: (id: string) => void } = {}) {
   return (
     <ReactFlowProvider>
-      <KnowledgeGraphViewInner />
+      <KnowledgeGraphViewInner onDrillIn={onDrillIn} />
     </ReactFlowProvider>
   );
 }

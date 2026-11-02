@@ -26,7 +26,7 @@ const EXPECTED_EDGE_TYPES = {
   // dependencies (3)
   depends_on: true, tested_by: true, configures: true,
   // semantic (2)
-  related: true, similar_to: true,
+  related: true, similar_to: true, group_relation: true,
   // infrastructure (8)
   deploys: true, serves: true, provisions: true, triggers: true,
   migrates: true, documents: true, routes: true, defines_schema: true,

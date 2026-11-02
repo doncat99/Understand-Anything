@@ -2,17 +2,17 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { assembleUnderstanding } from '../src/index.ts';
 
-test('one project overview preserves every document and its actual relationships', () => {
+test('one content overview retains document traceability without replacing knowledge with PDFs', () => {
   const sources = Array.from({ length: 90 }, (_, i) => ({ id: `source:${i}`, sourceId: String(i), label: `Document ${i}`, type: 'source' }));
   const concepts = sources.flatMap((source, i) => Array.from({ length: 10 }, (_, j) => ({ id: `n${i}:${j}`, type: 'concept', sourceId: source.sourceId, label: `Concept ${i}:${j}` })));
   const edges = sources.slice(1).map((source, i) => ({ id: `r${i}`, source: sources[i].id, target: source.id, type: 'source_relation' }));
   const result = assembleUnderstanding({ nodes: [...sources, ...concepts], edges });
   assert.equal(result.understanding.overviewSceneIds.length, 1);
   const overview = result.understanding.scenes.find(scene => scene.id === result.understanding.overviewSceneIds[0])!;
-  assert.deepEqual(overview.nodeIds, sources.map(source => source.id));
-  assert.equal(result.edges.filter(edge => overview.nodeIds.includes(edge.source) && overview.nodeIds.includes(edge.target)).length, 89);
+  assert.ok(overview.nodeIds.every(id => !id.startsWith('source:')));
+  assert.ok(overview.nodeIds.length < concepts.length);
   assert.ok(result.understanding.scenes.some(scene => scene.groupId === 'source:89' && scene.nodeIds.includes('n89:9')));
-  assert.equal(result.understanding.learning.length, 90);
+  assert.ok(result.understanding.learning.length > 0);
   assert.ok(result.understanding.learning.every(lesson => lesson.sourceIds.length && lesson.nodeIds.includes(lesson.focusId)));
 });
 

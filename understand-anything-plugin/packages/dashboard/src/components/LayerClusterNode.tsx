@@ -1,7 +1,7 @@
 import { memo } from "react";
 import { Handle, Position } from "@xyflow/react";
 import type { NodeProps, Node } from "@xyflow/react";
-import { getLayerColor } from "./LayerLegend";
+import { getLayerColor } from "../utils/layer-colors";
 
 const complexityColors: Record<string, string> = {
   simple: "text-node-function",
@@ -15,6 +15,8 @@ export interface LayerClusterData extends Record<string, unknown> {
   layerDescription: string;
   fileCount: number;
   aggregateComplexity: string;
+  itemLabel?: string;
+  kindLabel?: string;
   layerColorIndex: number;
   searchMatchCount?: number;
   onDrillIn: (layerId: string) => void;
@@ -27,7 +29,7 @@ function LayerClusterNode({
 }: NodeProps<LayerClusterFlowNode>) {
   const color = getLayerColor(data.layerColorIndex);
   const complexityColor =
-    complexityColors[data.aggregateComplexity] ?? complexityColors.simple;
+    complexityColors[data.aggregateComplexity] ?? "text-text-muted";
 
   return (
     <div
@@ -37,6 +39,14 @@ function LayerClusterNode({
         boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
       }}
       onClick={() => data.onDrillIn(data.layerId)}
+      role="button"
+      tabIndex={0}
+      aria-label={data.layerName}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault(); data.onDrillIn(data.layerId);
+        }
+      }}
     >
       {/* Left color bar */}
       <div
@@ -57,7 +67,7 @@ function LayerClusterNode({
             className="text-[10px] font-semibold uppercase tracking-wider"
             style={{ color: color.label }}
           >
-            Layer
+            {data.kindLabel ?? "Layer"}
           </span>
           <div className="flex items-center gap-2">
             {data.searchMatchCount != null && data.searchMatchCount > 0 && (
@@ -84,7 +94,7 @@ function LayerClusterNode({
         {/* Footer */}
         <div className="flex items-center justify-between">
           <span className="text-[11px] text-text-muted">
-            {data.fileCount} file{data.fileCount !== 1 ? "s" : ""}
+            {data.fileCount} {data.itemLabel ?? (data.fileCount === 1 ? "file" : "files")}
           </span>
           <span className="text-[10px] text-text-muted opacity-0 group-hover:opacity-100 transition-opacity">
             Click to explore →

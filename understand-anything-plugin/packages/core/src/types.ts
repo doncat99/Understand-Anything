@@ -13,7 +13,7 @@ export type EdgeType =
   | "calls" | "subscribes" | "publishes" | "middleware"              // Behavioral
   | "reads_from" | "writes_to" | "transforms" | "validates"         // Data flow
   | "depends_on" | "tested_by" | "configures"                       // Dependencies
-  | "related" | "similar_to"                                         // Semantic
+  | "related" | "similar_to" | "group_relation"                       // Semantic
   | "deploys" | "serves" | "provisions" | "triggers"                // Infrastructure
   | "migrates" | "documents" | "routes" | "defines_schema"          // Schema/Data
   | "contains_flow" | "flow_step" | "cross_domain"                  // Domain
@@ -22,6 +22,7 @@ export type EdgeType =
 
 // Optional knowledge metadata for article/entity/topic/claim/source nodes
 export interface KnowledgeMeta {
+  understandingGroup?: { kind: 'theme' | 'collection'; memberCount: number };
   wikilinks?: string[];
   backlinks?: string[];
   category?: string;
