@@ -16,38 +16,40 @@ export interface IndexedSink {
   write?(sql: string, ...args: unknown[]): unknown;
 }
 type Row = Record<string, string | number>;
+type NativeRelation = { id: string; source: string; target: string; type: string; direction: string };
 export interface IndexedNativeReader {
+  topology(after?: string): Promise<{ relations: NativeRelation[]; nextCursor: string | null }>;
   /** Caller binds every page to the same authorized immutable publication. */
   incident(nodeId: string, after?: string): Promise<{ relations: Array<{
     id: string; source: string; target: string; type: string; direction: string;
   }>; nextCursor: string | null }>;
 }
 
-async function* incident(native: IndexedNativeReader, sink: Pick<IndexedSink, 'check'>, nodeId: string) {
+async function* nativeRelations(native: IndexedNativeReader, sink: Pick<IndexedSink, 'check'>, nodeId?: string) {
   let after: string | undefined;
   do {
     sink.check();
-    const page = await native.incident(nodeId, after);
+    const page = await (nodeId === undefined ? native.topology(after) : native.incident(nodeId, after));
     sink.check();
     if (!page || typeof page !== 'object' || Object.keys(page).length !== 2
       || !Object.hasOwn(page, 'relations') || !Object.hasOwn(page, 'nextCursor')) {
-      throw new Error('Invalid UA native incident page.');
+      throw new Error('Invalid UA native relation page.');
     }
-    if (!Array.isArray(page.relations) || page.relations.length > 32
-      || Buffer.byteLength(JSON.stringify(page)) > 262144) throw new Error('UA native incident page exceeds its budget.');
+    if (!Array.isArray(page.relations) || page.relations.length > (nodeId === undefined ? 128 : 32)
+      || Buffer.byteLength(JSON.stringify(page)) > 262144) throw new Error('UA native relation page exceeds its budget.');
     let previous = after ?? '';
     for (const relation of page.relations) {
       if (!relation || typeof relation !== 'object' || Object.keys(relation).length !== 5
         || Object.entries(relation).some(([key,value]) => !['id','source','target','type','direction'].includes(key)
         || typeof value !== 'string' || !value || Buffer.byteLength(value) > 8192)
         || !relation.id || !relation.source || !relation.target || !relation.type || !relation.direction
-        || relation.id <= previous || (relation.source !== nodeId && relation.target !== nodeId)) {
-        throw new Error('Invalid UA native incident relation.');
+        || relation.id <= previous || (nodeId !== undefined && relation.source !== nodeId && relation.target !== nodeId)) {
+        throw new Error('Invalid UA native relation relation.');
       }
       previous = relation.id;
     }
     if (page.nextCursor !== null && (!page.relations.length || page.nextCursor !== previous)) {
-      throw new Error('Invalid UA native incident continuation.');
+      throw new Error('Invalid UA native relation continuation.');
     }
     for (const relation of page.relations) { sink.check(); yield relation; }
     after = page.nextCursor ?? undefined;
@@ -212,8 +214,7 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
   await organizeIndexedScene(db, sink, '', native);
   // Union-find lives on disk too; metrics do not need an eager adjacency graph.
   db.exec(`CREATE TABLE ua_components(id TEXT PRIMARY KEY,parent TEXT,rank INTEGER,connected INTEGER,conceptConnected INTEGER);
-    INSERT INTO ua_components SELECT id,id,0,0,0 FROM ua_catalog WHERE type='concept';
-    CREATE TABLE ua_metric_relations(id TEXT PRIMARY KEY);`);
+    INSERT INTO ua_components SELECT id,id,0,0,0 FROM ua_catalog WHERE type='concept';`);
   const root = (id: string): { id: string; rank: number } | undefined => {
     let row = one('SELECT parent,rank FROM ua_components WHERE id=?', id);
     if (!row) return;
@@ -221,24 +222,19 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
     return { id, rank: Number(row.rank) };
   };
   let edgeCount = 0;
-  for (const node of scan('SELECT id FROM ua_components WHERE id>? ORDER BY id LIMIT 128')) {
-    for await (const fact of incident(native, sink, String(node.id))) {
-      if (one('SELECT 1 FROM ua_metric_relations WHERE id=?', fact.id)) continue;
-      run('INSERT INTO ua_metric_relations VALUES(?)', fact.id);
-      run('UPDATE ua_components SET connected=1 WHERE id IN (?,?)', fact.source, fact.target);
-      const a = root(fact.source), b = root(fact.target);
-      if (!a || !b) continue;
-      run('UPDATE ua_components SET conceptConnected=1 WHERE id IN (?,?)', fact.source, fact.target);
-      edgeCount++;
-      if (a.id === b.id) continue;
-      const [parent, child] = a.rank >= b.rank ? [a,b] : [b,a];
-      run('UPDATE ua_components SET parent=? WHERE id=?', parent.id, child.id);
-      if (a.rank === b.rank) run('UPDATE ua_components SET rank=rank+1 WHERE id=?', parent.id);
-    }
+  for await (const fact of nativeRelations(native, sink)) {
+    run('UPDATE ua_components SET connected=1 WHERE id IN (?,?)', fact.source, fact.target);
+    const a = root(fact.source), b = root(fact.target);
+    if (!a || !b) continue;
+    run('UPDATE ua_components SET conceptConnected=1 WHERE id IN (?,?)', fact.source, fact.target);
+    edgeCount++;
+    if (a.id === b.id) continue;
+    const [parent, child] = a.rank >= b.rank ? [a,b] : [b,a];
+    run('UPDATE ua_components SET parent=? WHERE id=?', parent.id, child.id);
+    if (a.rank === b.rank) run('UPDATE ua_components SET rank=rank+1 WHERE id=?', parent.id);
   }
   const communitySizes = one("SELECT count(*) AS n,coalesce(min(size),0) AS min,coalesce(max(size),0) AS max FROM (SELECT n.id,count(m.child) AS size FROM ua_catalog n LEFT JOIN ua_members m ON m.parent=n.id WHERE n.type='community' GROUP BY n.id)")!;
   const isolatedNodeCount = count('SELECT count(*) n FROM ua_components WHERE conceptConnected=0');
-  run('DROP TABLE ua_metric_relations');
   return { totalModules: lessons, totalLessons: lessons, estimatedMinutes: 0, strategy: 'theme-reading' as const,
     graphMetrics: { knowledgeNodeCount: count('SELECT count(*) n FROM ua_components'), edgeCount, isolatedNodeCount,
       connectedComponentCount: count('SELECT count(*) n FROM ua_components WHERE id=parent'), communityCount: Number(communitySizes.n),
@@ -274,7 +270,7 @@ export async function organizeIndexedScene(db: IndexedDatabase, sink: Pick<Index
     const nodes = rows(`SELECT DISTINCT f.node AS id FROM ua_frontier f JOIN ua_catalog n ON n.id=f.node
       WHERE n.type IN ('concept','claim','entity','question','formula') AND f.node>? ORDER BY f.node LIMIT 128`, nodeCursor);
     if (!nodes.length) break;
-    for (const node of nodes) for await (const relation of incident(native, sink, String(node.id))) {
+    for (const node of nodes) for await (const relation of nativeRelations(native, sink, String(node.id))) {
       run(`INSERT OR IGNORE INTO ua_aggregates SELECT a.representative,b.representative,?,?,?
         FROM ua_frontier a JOIN ua_frontier b ON b.node=? WHERE a.node=?
         AND a.representative<>b.representative AND (a.representative<>? OR b.representative<>?)`,

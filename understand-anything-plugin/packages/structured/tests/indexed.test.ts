@@ -14,7 +14,13 @@ function fixture() {
   const relations: Array<{ id: string; source: string; target: string; type: string; direction: string }> = [];
   const fact = (id: string, source: string, target: string, direction = 'forward') => relations.push({ id, source, target, type: 'contradicts', direction });
   const requests: Array<{ nodeId: string; after?: string }> = [];
-  const native = { async incident(nodeId: string, after?: string) {
+  const topologyRequests: Array<string | undefined>=[];
+  const native = { async topology(after?: string) {
+    topologyRequests.push(after);
+    const matches=relations.filter(row=>row.id>(after??'')).sort((a,b)=>a.id.localeCompare(b.id));
+    const page=matches.slice(0,128);
+    return {relations:page,nextCursor:matches.length>page.length?page.at(-1)!.id:null};
+  }, async incident(nodeId: string, after?: string) {
     requests.push({ nodeId, after });
     const matches = relations.filter(row => (row.source === nodeId || row.target === nodeId) && row.id > (after ?? '')).sort((a,b) => a.id.localeCompare(b.id));
     const page = matches.slice(0,32);
@@ -24,7 +30,7 @@ function fixture() {
   const sink = { node() {}, edge: (edge: any) => edges.push(edge), reference: (_: string, relation: string) => refs.push(relation),
     scene(scope: string, _: string, ids: string[]) { assert.ok(ids.length <= 128); scenes.set(scope, ids); },
     lesson(_: number, lesson: any) { lessons.push(lesson); }, check() {} };
-  return { db, node, member, fact, scenes, edges, lessons, refs, sink, native, requests };
+  return { db, node, member, fact, scenes, edges, lessons, refs, sink, native, requests, topologyRequests };
 }
 test('indexed scenes retain nested/overlapping rollups, direction, provenance and source-backed reading', async () => {
   const f = fixture();
@@ -104,53 +110,85 @@ test('native incident pages retain every aggregate reference and exact metrics w
   assert.deepEqual(result.graphMetrics,{ knowledgeNodeCount:3,edgeCount:140,isolatedNodeCount:1,
     connectedComponentCount:2,communityCount:0,minCommunitySize:0,maxCommunitySize:0 });
   assert.equal(result.coverage.connectedKnowledgeNodeCount,2);
-  assert.ok(f.requests.some(request => request.after === 'r127'));
+  assert.deepEqual(f.topologyRequests,[undefined,'r127']);
   assert.equal(f.db.prepare("SELECT count(*) n FROM sqlite_master WHERE name IN ('ua_nodes','ua_facts')").get()!.n,0);
   f.db.close();
 });
 
 test('native page failures and cancellation never become an empty successful catalog', async () => {
   const f = fixture(); f.node('a');
-  await assert.rejects(organizeIndexed(f.db as any,f.sink,{ async incident() { throw new Error('withdrawn'); } }),/withdrawn/);
+  await assert.rejects(organizeIndexed(f.db as any,f.sink,{ ...f.native, async topology() { throw new Error('withdrawn'); } }),/withdrawn/);
   f.db.close();
   const cancelled = fixture(); cancelled.node('a');
   await assert.rejects(organizeIndexed(cancelled.db as any,{...cancelled.sink,check() { throw new Error('cancelled'); }},cancelled.native),/cancelled/);
   assert.equal(cancelled.requests.length,0); cancelled.db.close();
 });
 
-test('native incident rejects malformed pages, foreign endpoints and non-progressing cursors', async () => {
+test('native topology rejects malformed pages and non-progressing cursors', async () => {
   const relation = { id:'r',source:'a',target:'b',type:'related',direction:'forward' };
   const pages = [
     { relations:[relation],nextCursor:'different' },
     { relations:[],nextCursor:'r' },
-    { relations:[{...relation,source:'foreign'}],nextCursor:null },
+    { relations:[{...relation,direction:''}],nextCursor:null },
     { relations:[relation,relation],nextCursor:null },
     { relations:[{...relation,type:'界'.repeat(3000)}],nextCursor:null },
-    { relations:Array.from({length:33},(_,i)=>({...relation,id:`r${i}`})),nextCursor:null },
+    { relations:Array.from({length:129},(_,i)=>({...relation,id:`r${i}`})),nextCursor:null },
     { relations:[null],nextCursor:null },
     { relations:[],nextCursor:null,extra:'unbound' },
   ];
   for (const page of pages) {
     const f = fixture(); f.node('a');
-    await assert.rejects(organizeIndexed(f.db as any,f.sink,{ async incident() { return page as any; } }),/UA native incident/);
+    await assert.rejects(organizeIndexed(f.db as any,f.sink,{ ...f.native, async topology() { return page as any; } }),/UA native relation/);
     f.db.close();
   }
   const repeated = fixture(); repeated.node('a');
-  await assert.rejects(organizeIndexed(repeated.db as any,repeated.sink,{ async incident() {
+  await assert.rejects(organizeIndexed(repeated.db as any,repeated.sink,{ ...repeated.native, async topology() {
     return { relations:[relation],nextCursor:'r' };
-  } }),/Invalid UA native incident relation/);
+  } }),/Invalid UA native relation relation/);
   repeated.db.close();
 });
 
-test('native incident enforces the page byte budget and cancellation after await', async () => {
+test('native topology enforces the page byte budget and cancellation after await', async () => {
   const f = fixture(); f.node('a');
-  await assert.rejects(organizeIndexed(f.db as any,f.sink,{ async incident() {
-    return { relations:Array.from({length:32},(_,i)=>({ id:`r${String(i).padStart(2,'0')}`,source:'a',target:'b',type:'x'.repeat(8192),direction:'forward' })),nextCursor:null };
-  } }),/UA native incident page exceeds its budget/);
+  await assert.rejects(organizeIndexed(f.db as any,f.sink,{ ...f.native, async topology() {
+    return { relations:Array.from({length:128},(_,i)=>({ id:`r${String(i).padStart(2,'0')}`,source:'a',target:'b',type:'x'.repeat(8192),direction:'forward' })),nextCursor:null };
+  } }),/UA native relation page exceeds its budget/);
   f.db.close();
   const cancelled = fixture(); cancelled.node('a'); let withdrawn = false;
   await assert.rejects(organizeIndexed(cancelled.db as any,{...cancelled.sink,check() {
     if (withdrawn) throw new Error('withdrawn after native read');
-  }},{ async incident() { withdrawn = true; return { relations:[],nextCursor:null }; } }),/withdrawn after native read/);
+  }},{ ...cancelled.native, async topology() { withdrawn = true; return { relations:[],nextCursor:null }; } }),/withdrawn after native read/);
   cancelled.db.close();
+});
+
+ test('metrics read one topology stream rather than every concept neighborhood', async () => {
+  const f=fixture();
+  for(let i=0;i<1000;i++)f.node(`n${i}`);
+  f.fact('edge','n0','n999');
+  let topologyCalls=0;
+  const native={...f.native,async topology() {
+    topologyCalls++;return {relations:[{id:'edge',source:'n0',target:'n999',type:'contradicts',direction:'forward'}],nextCursor:null};
+  }};
+  const result=await organizeIndexed(f.db as any,f.sink,native);
+  assert.equal(topologyCalls,1);
+  // No graph concepts are visible in the initial navigation-only scene.
+  assert.equal(f.requests.length,0);
+  assert.equal(result.graphMetrics.edgeCount,1);
+  assert.equal(result.graphMetrics.connectedComponentCount,999);
+  f.db.close();
+});
+
+ test('scene incident reads still reject foreign endpoints and oversized pages', async () => {
+  for (const relations of [
+    [{id:'foreign',source:'outside',target:'elsewhere',type:'relates',direction:'forward'}],
+    Array.from({length:33},(_,i)=>({id:`r${String(i).padStart(2,'0')}`,source:'a',target:'b',type:'relates',direction:'forward'})),
+  ]) {
+    const f=fixture(); f.node('theme','topic'); f.node('a'); f.node('b');
+    f.member('theme','a'); f.member('theme','b');
+    await organizeIndexed(f.db as any,f.sink,f.native);
+    await assert.rejects(organizeIndexedScene(f.db as any,f.sink,'theme',{
+      ...f.native,async incident(){return {relations,nextCursor:null};}
+    }),/UA native relation/);
+    f.db.close();
+  }
 });
