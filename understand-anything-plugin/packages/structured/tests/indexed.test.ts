@@ -73,7 +73,7 @@ test('equal membership never aliases semantic topics; structural communities do 
   assert.ok(f.lessons.every(lesson => ['topic','other-topic'].includes(lesson.focusId))); f.db.close();
 });
 
-test('unqualified topology stays accessible without fabricated themes or reading modules', async () => {
+test('unqualified topology stays navigation while its source-backed concept has a reading entry', async () => {
   const f = fixture(); f.node('legacy-topic','topic',false); f.node('community','community'); f.node('a');
   f.member('legacy-topic','a'); f.member('community','a');
   f.db.prepare('INSERT INTO ua_sources VALUES(?,?)').run('a','pdf');
@@ -81,7 +81,8 @@ test('unqualified topology stays accessible without fabricated themes or reading
   assert.deepEqual(f.scenes.get(''),['ua:navigation:content','ua:navigation:sources']);
   assert.ok(f.scenes.get('ua:navigation:content')!.includes('legacy-topic'));
   assert.ok(f.scenes.get('community')!.includes('a'));
-  assert.equal(result.totalModules,0); assert.equal(f.lessons.length,0); f.db.close();
+  assert.equal(result.totalModules,1); assert.equal(f.lessons.length,1);
+  assert.equal(f.lessons[0].focusId,'a'); f.db.close();
 });
 
 test('catalog construction defers non-overview relationship expansion until that scene is requested', async () => {
@@ -191,4 +192,39 @@ test('native topology enforces the page byte budget and cancellation after await
     }),/UA native relation/);
     f.db.close();
   }
+});
+
+
+test('source-backed concepts outside semantic themes receive concrete reading entries without invented themes', async () => {
+  const f = fixture(); f.node('theme','topic'); f.node('inside'); f.node('outside'); f.node('unsupported');
+  f.member('theme','inside');
+  for (const id of ['inside','outside']) f.db.prepare('INSERT INTO ua_sources VALUES(?,?)').run(id,'pdf');
+  const result = await organizeIndexed(f.db as any,f.sink,f.native);
+  assert.equal(result.coverage.plannedKnowledgeNodeCount,2);
+  const lesson = f.lessons.find(row => row.focusId === 'outside');
+  assert.ok(lesson); assert.deepEqual(lesson.nodeIds,['outside']);
+  assert.deepEqual(f.scenes.get('outside'),['outside']);
+  assert.ok(!f.scenes.get('')!.includes('outside'));
+  assert.ok(!f.lessons.some(row => row.nodeIds.includes('unsupported')));
+  assert.ok(!f.lessons.some(row => row.objective.includes('No prerequisites or mastery')));
+  f.db.close();
+});
+
+test('ungrouped reading coverage remains complete across catalog pages and singleton scenes open native cards', async () => {
+  const f = fixture();
+  for (let i = 0; i < 300; i++) {
+    const id = `concept:${String(i).padStart(4, '0')}`;
+    f.node(id); f.db.prepare('INSERT INTO ua_sources VALUES(?,?)').run(id, 'pdf');
+  }
+  const result = await organizeIndexed(f.db as any, f.sink, f.native);
+  assert.equal(result.totalModules, 300);
+  assert.equal(result.coverage.plannedKnowledgeNodeCount, 300);
+  assert.equal(new Set(f.lessons.flatMap(lesson => lesson.nodeIds)).size, 300);
+  for (const lesson of f.lessons) {
+    assert.deepEqual(f.scenes.get(lesson.focusId), [lesson.focusId]);
+    assert.equal(Buffer.byteLength(JSON.stringify(lesson)) < 262144, true);
+  }
+  await organizeIndexedScene(f.db as any, f.sink, f.lessons[299].focusId, f.native);
+  assert.equal(f.requests.length, 0);
+  f.db.close();
 });

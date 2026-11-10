@@ -193,6 +193,14 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
     // The empty overview key is processed separately below.
     processScene(String(row.id), String(row.title), JSON.parse(String(row.ids)) as string[]);
   }
+  for (const row of scan(`SELECT n.id,n.label FROM ua_catalog n WHERE n.type IN ('concept','claim','entity','question','formula')
+    AND EXISTS(SELECT 1 FROM ua_sources s WHERE s.node=n.id)
+    AND NOT EXISTS(SELECT 1 FROM ua_planned p WHERE p.id=n.id) AND n.id>? ORDER BY n.id LIMIT 128`)) {
+    const id = String(row.id);
+    storeScene(id, String(row.label), []);
+    run('INSERT INTO ua_reading_scopes VALUES(?,?)', id, id);
+    processScene(id, String(row.label), [id]);
+  }
   const overview = one("SELECT title,ids FROM ua_scenes WHERE id=''")!;
   processScene('', String(overview.title), JSON.parse(String(overview.ids)) as string[]);
   function processScene(scope: string, title: string, ids: string[]) {
@@ -205,7 +213,7 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
     if (sources.length > 128) throw new Error('UA reading scene exceeds 128 source references.');
     if (!sources.length) return;
     const nodeIds = ids.filter(id => id === scope || !one('SELECT 1 FROM ua_scenes WHERE id=?', id));
-    sink.lesson(lessons++, { id: `reading:${scope ? `group:${scope}` : 'overview'}`, title, objective: `Explore ${title}: inspect concepts, recorded relationships and source evidence. No prerequisites or mastery assessment inferred.`, focusId: scope || knowledge[0]!, nodeIds, sourceIds: sources });
+    sink.lesson(lessons++, { id: `reading:${scope ? `group:${scope}` : 'overview'}`, title, objective: knowledge.map(id => String(one('SELECT label FROM ua_catalog WHERE id=?', id)!.label)).join(' · '), focusId: scope || knowledge[0]!, nodeIds, sourceIds: sources });
     for (const id of knowledge) run('INSERT OR IGNORE INTO ua_planned VALUES(?)', id);
     for (const source of sources) run('INSERT OR IGNORE INTO ua_covered VALUES(?)', source);
   }
