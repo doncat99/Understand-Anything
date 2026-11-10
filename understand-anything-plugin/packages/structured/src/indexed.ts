@@ -272,8 +272,10 @@ export async function organizeIndexedScene(db: IndexedDatabase, sink: Pick<Index
       INSERT OR IGNORE INTO ua_frontier SELECT id,? FROM descendants`, id, scope, id);
     if (scope) sink.edge({ id: `ua:contains:${scope}:${id}`, source: scope, target: id, type: 'contains', layer: 'knowledge', metadata: { presentationOnly: true, sceneId } });
   }
+  // Direct native edges are read by endpoint; only collapsed endpoints need rollups.
+  const hasCollapsedEndpoint = db.prepare('SELECT 1 FROM ua_frontier WHERE node<>representative LIMIT 1').get();
   let nodeCursor = '';
-  for (;;) {
+  while (hasCollapsedEndpoint) {
     sink.check();
     const nodes = rows(`SELECT DISTINCT f.node AS id FROM ua_frontier f JOIN ua_catalog n ON n.id=f.node
       WHERE n.type IN ('concept','claim','entity','question','formula') AND f.node>? ORDER BY f.node LIMIT 128`, nodeCursor);

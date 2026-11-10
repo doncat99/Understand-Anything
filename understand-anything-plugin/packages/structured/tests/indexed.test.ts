@@ -85,13 +85,15 @@ test('unqualified topology stays navigation while its source-backed concept has 
   assert.equal(f.lessons[0].focusId,'a'); f.db.close();
 });
 
-test('catalog construction defers non-overview relationship expansion until that scene is requested', async () => {
+test('direct-node scenes retain containment without scanning canonical relations', async () => {
   const f = fixture(); f.node('theme','topic'); f.node('a'); f.node('b');
   f.member('theme','a'); f.member('theme','b'); f.fact('r','a','b');
   await organizeIndexed(f.db as any, f.sink, f.native);
   assert.ok(f.scenes.has('theme'));
   assert.equal(f.edges.filter(e => e.metadata?.sceneId === 'group:theme').length, 0);
+  f.requests.length = 0;
   await organizeIndexedScene(f.db as any, f.sink, 'theme', f.native);
+  assert.equal(f.requests.length, 0);
   assert.equal(f.edges.filter(e => e.type === 'contains' && e.metadata?.sceneId === 'group:theme').length, 2);
   // Direct facts remain canonical and are read by endpoint; no fabricated aggregate.
   assert.equal(f.edges.filter(e => e.type === 'group_relation').length, 0);
@@ -185,7 +187,8 @@ test('native topology enforces the page byte budget and cancellation after await
     Array.from({length:33},(_,i)=>({id:`r${String(i).padStart(2,'0')}`,source:'a',target:'b',type:'relates',direction:'forward'})),
   ]) {
     const f=fixture(); f.node('theme','topic'); f.node('a'); f.node('b');
-    f.member('theme','a'); f.member('theme','b');
+    f.node('nested','topic'); f.member('theme','nested');
+    f.member('nested','a'); f.member('theme','b');
     await organizeIndexed(f.db as any,f.sink,f.native);
     await assert.rejects(organizeIndexedScene(f.db as any,f.sink,'theme',{
       ...f.native,async incident(){return {relations,nextCursor:null};}
