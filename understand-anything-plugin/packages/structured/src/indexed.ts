@@ -174,8 +174,9 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
       navigationRoot: true, understandingGroup: { kind: 'collection' },
       content: 'Index navigation; this entry is not a semantic theme or a reading course.' } };
     run('INSERT INTO ua_catalog(id,type,label,navigationRoot) VALUES(?,?,?,1)', id, node.type, title);
-    sink.node(node);
     for (const row of scan(sql)) run('INSERT INTO ua_navigation VALUES(?,?)', id, row.id);
+    sink.node({ ...node, metadata: { ...node.metadata, understandingGroup: { kind: 'collection',
+      memberCount: count('SELECT count(*) n FROM ua_navigation WHERE parent=?', id) } } });
     sceneFor(id, title, 'SELECT child AS id FROM ua_navigation WHERE parent=? AND child>? ORDER BY child LIMIT 128', [id]);
   };
   navigation('ua:navigation:content', 'All indexed content', 'SELECT id FROM ua_roots WHERE id>? ORDER BY id LIMIT 128');
