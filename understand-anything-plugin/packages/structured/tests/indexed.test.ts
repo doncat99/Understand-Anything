@@ -40,7 +40,7 @@ test('indexed scenes retain nested/overlapping rollups, direction, provenance an
   f.fact('r','a','b'); f.fact('back','a','b','backward'); f.fact('direct','a','ungrouped');
   f.db.prepare('INSERT INTO ua_sources VALUES(?,?)').run('a','pdf');
   const result = await organizeIndexed(f.db as any, f.sink, f.native);
-  assert.deepEqual(f.scenes.get(''), ['other','outer','ua:navigation:content','ua:navigation:sources']);
+  assert.deepEqual(f.scenes.get(''), ['other','outer','ua:navigation:concept','ua:navigation:content','ua:navigation:sources','ua:navigation:themes']);
   assert.ok(f.scenes.get('ua:navigation:content')!.includes('ungrouped'));
   const rootEdges = f.edges.filter(edge => edge.metadata?.sceneId === 'overview');
   assert.ok(rootEdges.some(edge => edge.source === 'outer' && edge.target === 'other' && edge.metadata.direction === 'backward'));
@@ -66,7 +66,7 @@ test('equal membership never aliases semantic topics; structural communities do 
   f.db.prepare('INSERT INTO ua_catalog(id,type,label,source) VALUES(?,?,?,?)').run('source:card','source','PDF','canonical-pdf');
   f.db.prepare('INSERT INTO ua_sources VALUES(?,?)').run('a','canonical-pdf');
   await organizeIndexed(f.db as any,f.sink,f.native);
-  assert.deepEqual(f.scenes.get(''),['other-topic','topic','ua:navigation:content','ua:navigation:sources']);
+  assert.deepEqual(f.scenes.get(''),['other-topic','topic','ua:navigation:concept','ua:navigation:content','ua:navigation:sources','ua:navigation:themes']);
   assert.deepEqual(f.scenes.get('topic'),['topic','a']);
   assert.deepEqual(f.scenes.get('source:card'),['source:card','a']);
   assert.equal(f.lessons.length,2);
@@ -78,7 +78,7 @@ test('unqualified topology stays navigation while its source-backed concept has 
   f.member('legacy-topic','a'); f.member('community','a');
   f.db.prepare('INSERT INTO ua_sources VALUES(?,?)').run('a','pdf');
   const result = await organizeIndexed(f.db as any,f.sink,f.native);
-  assert.deepEqual(f.scenes.get(''),['ua:navigation:content','ua:navigation:sources']);
+  assert.deepEqual(f.scenes.get(''),['ua:navigation:concept','ua:navigation:content','ua:navigation:sources','ua:navigation:themes']);
   assert.ok(f.scenes.get('ua:navigation:content')!.includes('legacy-topic'));
   assert.ok(f.scenes.get('community')!.includes('a'));
   assert.equal(result.totalModules,1); assert.equal(f.lessons.length,1);
@@ -229,5 +229,29 @@ test('ungrouped reading coverage remains complete across catalog pages and singl
   }
   await organizeIndexedScene(f.db as any, f.sink, f.lessons[299].focusId, f.native);
   assert.equal(f.requests.length, 0);
+  f.db.close();
+});
+
+
+test('mixed knowledge types remain completely reachable without incident scans of type collections', async () => {
+  const f = fixture();
+  f.node('theme','topic');
+  for (const type of ['concept','entity','claim','conflict','formula']) {
+    for (let i=0;i<400;i++) f.node(`${type}:${String(i).padStart(4,'0')}`, type);
+  }
+  await organizeIndexed(f.db as any, f.sink, f.native);
+  for (const type of ['concept','entity','claim','conflict','formula']) {
+    assert.ok(f.scenes.get('')!.includes(`ua:navigation:${type}`));
+    const seen = new Set<string>();
+    const visit = (id: string) => { if (seen.has(id)) return; seen.add(id); for (const next of f.scenes.get(id) ?? []) visit(next); };
+    visit(`ua:navigation:${type}`);
+    for (let i=0;i<400;i++) assert.ok(seen.has(`${type}:${String(i).padStart(4,'0')}`));
+    for (const id of seen) if (f.scenes.has(id)) {
+      f.requests.length=0;
+      await organizeIndexedScene(f.db as any, f.sink, id, f.native);
+      assert.equal(f.requests.length,0);
+    }
+  }
+  assert.equal(f.db.prepare("SELECT count(*) n FROM ua_catalog WHERE type='claim'").get()!.n,400);
   f.db.close();
 });

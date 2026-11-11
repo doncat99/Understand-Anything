@@ -98,12 +98,12 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
     if (!one('SELECT 1 FROM ua_reachable WHERE id=?', id)) { run('INSERT OR IGNORE INTO ua_roots VALUES(?)', id); visit(id); }
   }
   let sequence = 0;
-  const addCollection = (members: string[], title: string, readingTopic?: string) => {
+  const addCollection = (members: string[], title: string, readingTopic?: string, navigationOnly = false) => {
     const id = `ua:collection:${sequence++}`;
     const node = { id, type: 'topic', label: title, layer: 'knowledge', metadata: {
       presentationOnly: true, understandingGroup: { kind: 'collection', memberCount: members.length },
       content: 'Navigation collection; this grouping does not assert a semantic relationship.' } };
-    run('INSERT INTO ua_catalog(id,type,label) VALUES(?,?,?)', id, node.type, node.label);
+    run('INSERT INTO ua_catalog(id,type,label,navigationRoot) VALUES(?,?,?,?)', id, node.type, node.label, navigationOnly ? 1 : 0);
     sink.node(node);
     if (readingTopic) run('INSERT INTO ua_reading_scopes VALUES(?,?)', id, readingTopic);
     for (const member of members) run('INSERT INTO ua_navigation VALUES(?,?)', id, member);
@@ -118,6 +118,7 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
     let members: string[] = [];
     const capacity = scope ? 127 : 128;
     let childLevel = 0;
+    const navigationOnly = !!one('SELECT navigationRoot FROM ua_catalog WHERE id=?', scope)?.navigationRoot;
     const readingTopic = one('SELECT topic FROM ua_reading_scopes WHERE id=?', scope)?.topic as string | undefined;
     // Each level is a disk queue. Never retain all child collections in JS.
     db.exec('CREATE TABLE IF NOT EXISTS ua_queue(level INTEGER,id TEXT,PRIMARY KEY(level,id))');
@@ -128,7 +129,7 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
       members.push(id);
       if (members.length === capacity + 1) {
         const overflow = members.splice(127);
-        const child = addCollection(members, `${title} · ${sequence + 1}`, readingTopic);
+        const child = addCollection(members, `${title} · ${sequence + 1}`, readingTopic, navigationOnly);
         storeScene(child, `${title} · ${sequence}`, members);
         run('INSERT INTO ua_queue VALUES(?,?)', 0, child);
         members = overflow;
@@ -136,7 +137,7 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
     }
     if (!count('SELECT count(*) n FROM ua_queue')) { storeScene(scope, title, members); return; }
     if (members.length) {
-      const child = addCollection(members, `${title} · ${sequence + 1}`, readingTopic);
+      const child = addCollection(members, `${title} · ${sequence + 1}`, readingTopic, navigationOnly);
       storeScene(child, `${title} · ${sequence}`, members);
       run('INSERT INTO ua_queue VALUES(?,?)', 0, child);
     }
@@ -145,13 +146,13 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
       for (const row of scan('SELECT id FROM ua_queue WHERE level=? AND id>? ORDER BY id LIMIT 128', [childLevel])) {
         members.push(String(row.id));
         if (members.length === 127) {
-          const child = addCollection(members, `${title} · ${sequence + 1}`, readingTopic);
+          const child = addCollection(members, `${title} · ${sequence + 1}`, readingTopic, navigationOnly);
           storeScene(child, `${title} · ${sequence}`, members);
           run('INSERT INTO ua_queue VALUES(?,?)', childLevel + 1, child); members = [];
         }
       }
       if (members.length) {
-        const child = addCollection(members, `${title} · ${sequence + 1}`, readingTopic);
+        const child = addCollection(members, `${title} · ${sequence + 1}`, readingTopic, navigationOnly);
         storeScene(child, `${title} · ${sequence}`, members);
         run('INSERT INTO ua_queue VALUES(?,?)', childLevel + 1, child);
       }
@@ -179,11 +180,18 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
   };
   navigation('ua:navigation:content', 'All indexed content', 'SELECT id FROM ua_roots WHERE id>? ORDER BY id LIMIT 128');
   navigation('ua:navigation:sources', 'Sources', "SELECT id FROM ua_catalog WHERE type='source' AND id>? ORDER BY id LIMIT 128");
-  // Overview contains native themes and explicit navigation, never ID buckets posing as themes.
+  for (const [type, title] of [['concept','Concepts'], ['entity','Entities'], ['claim','Facts'], ['conflict','Conflicts'], ['formula','Formulas']]) {
+    if (count('SELECT count(*) n FROM ua_catalog WHERE type=?', type)) {
+      navigation(`ua:navigation:${type}`, title, `SELECT id FROM ua_catalog WHERE type='${type}' AND id>? ORDER BY id LIMIT 128`);
+    }
+  }
+  // Keep type entries reachable even when there are more themes than one page.
+  navigation('ua:navigation:themes', 'Themes', 'SELECT id FROM ua_topics WHERE id>? ORDER BY id LIMIT 128');
+  const rootThemes = `SELECT t.id FROM ua_topics t WHERE NOT EXISTS(SELECT 1 FROM ua_navigation m JOIN ua_topics p ON p.id=m.parent WHERE m.child=t.id)`;
+  const showThemes = count(`SELECT count(*) n FROM (${rootThemes})`) <= 119;
   sceneFor('', 'Overview', `SELECT id FROM (
-    SELECT t.id FROM ua_topics t WHERE NOT EXISTS(SELECT 1 FROM ua_navigation m JOIN ua_topics p ON p.id=m.parent WHERE m.child=t.id)
-    UNION SELECT id FROM ua_catalog WHERE id IN ('ua:navigation:content','ua:navigation:sources'))
-    WHERE id>? ORDER BY id LIMIT 128`, []);
+    SELECT id FROM ua_catalog WHERE id LIKE 'ua:navigation:%'
+    ${showThemes ? `UNION ${rootThemes}` : ''}) WHERE id>? ORDER BY id LIMIT 128`, []);
   for (const row of scan("SELECT id,label,source FROM ua_catalog WHERE type='source' AND id>? ORDER BY id LIMIT 128")) {
     if (!row.source) throw new Error('UA source card requires its canonical source reference.');
     sceneFor(String(row.id), String(row.label), 'SELECT node AS id FROM ua_sources WHERE source=? AND node>? ORDER BY node LIMIT 128', [row.source]);
@@ -222,7 +230,7 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
   await organizeIndexedScene(db, sink, '', native);
   // Union-find lives on disk too; metrics do not need an eager adjacency graph.
   db.exec(`CREATE TABLE ua_components(id TEXT PRIMARY KEY,parent TEXT,rank INTEGER,connected INTEGER,conceptConnected INTEGER);
-    INSERT INTO ua_components SELECT id,id,0,0,0 FROM ua_catalog WHERE type='concept';`);
+    INSERT INTO ua_components SELECT id,id,0,0,0 FROM ua_catalog WHERE type IN ('concept','entity');`);
   const root = (id: string): { id: string; rank: number } | undefined => {
     let row = one('SELECT parent,rank FROM ua_components WHERE id=?', id);
     if (!row) return;
@@ -251,7 +259,7 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
       connectedKnowledgeNodeCount: count('SELECT count(*) n FROM ua_components WHERE connected=1'),
       sourceCount: count("SELECT count(*) n FROM ua_catalog WHERE type='source'"), coveredSourceCount: count('SELECT count(*) n FROM ua_covered'),
       plannedKnowledgeNodeCount: count('SELECT count(*) n FROM ua_planned'),
-      unclusteredNodeCount: count("SELECT count(*) n FROM ua_catalog n WHERE type='concept' AND NOT EXISTS(SELECT 1 FROM ua_planned p WHERE p.id=n.id)") } };
+      unclusteredNodeCount: count("SELECT count(*) n FROM ua_catalog n WHERE type IN ('concept','entity') AND NOT EXISTS(SELECT 1 FROM ua_planned p WHERE p.id=n.id)") } };
 }
 
 /** Expand one catalog scene. Call in a cancellable child, with atomic cache publication. */
@@ -278,7 +286,7 @@ export async function organizeIndexedScene(db: IndexedDatabase, sink: Pick<Index
   while (hasCollapsedEndpoint) {
     sink.check();
     const nodes = rows(`SELECT DISTINCT f.node AS id FROM ua_frontier f JOIN ua_catalog n ON n.id=f.node
-      WHERE n.type IN ('concept','claim','entity','question','formula') AND f.node>? ORDER BY f.node LIMIT 128`, nodeCursor);
+      WHERE n.type IN ('concept','entity','formula') AND f.node>? ORDER BY f.node LIMIT 128`, nodeCursor);
     if (!nodes.length) break;
     for (const node of nodes) for await (const relation of nativeRelations(native, sink, String(node.id))) {
       run(`INSERT OR IGNORE INTO ua_aggregates SELECT a.representative,b.representative,?,?,?
