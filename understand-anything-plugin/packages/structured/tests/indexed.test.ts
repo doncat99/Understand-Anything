@@ -92,7 +92,7 @@ test('direct-node scenes retain containment without scanning canonical relations
   assert.ok(f.scenes.has('theme'));
   assert.equal(f.edges.filter(e => e.metadata?.sceneId === 'group:theme').length, 0);
   f.requests.length = 0;
-  await organizeIndexedScene(f.db as any, f.sink, 'theme', f.native);
+  await organizeIndexedScene(f.db as any, f.sink, 'theme');
   assert.equal(f.requests.length, 0);
   assert.equal(f.edges.filter(e => e.type === 'contains' && e.metadata?.sceneId === 'group:theme').length, 2);
   // Direct facts remain canonical and are read by endpoint; no fabricated aggregate.
@@ -100,7 +100,7 @@ test('direct-node scenes retain containment without scanning canonical relations
   f.db.close();
 });
 
-test('native incident pages retain every aggregate reference and exact metrics without a fact table', async () => {
+test('one native topology traversal retains every aggregate reference and exact metrics without a fact table', async () => {
   const f = fixture(); f.node('left','topic'); f.node('right','topic');
   for (const id of ['a','b','isolated']) f.node(id);
   f.member('left','a'); f.member('right','b');
@@ -181,23 +181,6 @@ test('native topology enforces the page byte budget and cancellation after await
   f.db.close();
 });
 
- test('scene incident reads still reject foreign endpoints and oversized pages', async () => {
-  for (const relations of [
-    [{id:'foreign',source:'outside',target:'elsewhere',type:'relates',direction:'forward'}],
-    Array.from({length:33},(_,i)=>({id:`r${String(i).padStart(2,'0')}`,source:'a',target:'b',type:'relates',direction:'forward'})),
-  ]) {
-    const f=fixture(); f.node('theme','topic'); f.node('a'); f.node('b');
-    f.node('nested','topic'); f.member('theme','nested');
-    f.member('nested','a'); f.member('theme','b');
-    await organizeIndexed(f.db as any,f.sink,f.native);
-    await assert.rejects(organizeIndexedScene(f.db as any,f.sink,'theme',{
-      ...f.native,async incident(){return {relations,nextCursor:null};}
-    }),/UA native relation/);
-    f.db.close();
-  }
-});
-
-
 test('source-backed concepts outside semantic themes receive concrete reading entries without invented themes', async () => {
   const f = fixture(); f.node('theme','topic'); f.node('inside'); f.node('outside'); f.node('unsupported');
   f.member('theme','inside');
@@ -227,7 +210,7 @@ test('ungrouped reading coverage remains complete across catalog pages and singl
     assert.deepEqual(f.scenes.get(lesson.focusId), [lesson.focusId]);
     assert.equal(Buffer.byteLength(JSON.stringify(lesson)) < 262144, true);
   }
-  await organizeIndexedScene(f.db as any, f.sink, f.lessons[299].focusId, f.native);
+  await organizeIndexedScene(f.db as any, f.sink, f.lessons[299].focusId);
   assert.equal(f.requests.length, 0);
   f.db.close();
 });
@@ -248,10 +231,25 @@ test('mixed knowledge types remain completely reachable without incident scans o
     for (let i=0;i<400;i++) assert.ok(seen.has(`${type}:${String(i).padStart(4,'0')}`));
     for (const id of seen) if (f.scenes.has(id)) {
       f.requests.length=0;
-      await organizeIndexedScene(f.db as any, f.sink, id, f.native);
+      await organizeIndexedScene(f.db as any, f.sink, id);
       assert.equal(f.requests.length,0);
     }
   }
   assert.equal(f.db.prepare("SELECT count(*) n FROM ua_catalog WHERE type='claim'").get()!.n,400);
+  f.db.close();
+});
+
+test('overlapping scenes reuse one topology traversal in a build-only TEMP table', async () => {
+  const f = fixture();
+  for (const id of ['left','right','overlap']) f.node(id,'topic');
+  f.node('a'); f.node('b');
+  f.member('left','a'); f.member('overlap','a'); f.member('right','b');
+  f.fact('r','a','b');
+  await organizeIndexed(f.db as any,f.sink,f.native);
+  for(const scope of ['left','right','overlap']) await organizeIndexedScene(f.db as any,f.sink,scope);
+  assert.equal(f.requests.length,0);
+  assert.equal(f.topologyRequests.length,1);
+  assert.equal(f.db.prepare("SELECT count(*) n FROM sqlite_master WHERE name='ua_build_relations'").get()!.n,0);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM temp.ua_build_relations').get()!.n,1);
   f.db.close();
 });
