@@ -48,6 +48,7 @@ export const ja = {
     avgConnectionsPerNode: "ノード平均接続数",
   },
   nodeInfo: {
+    semantic: { assertion: "主張／事実", conflict: "矛盾", entity: "対象", formula: "数式", subject: "主語", predicate: "述語", object: "値／目的語", qualifiers: "限定条件", status: "状態", assertions: "関連する主張", description: "説明", attributes: "属性", expression: "式" },
     definedInThisFile: "このファイルで定義",
     languageConcepts: "言語概念",
     category: "カテゴリ",

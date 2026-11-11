@@ -48,6 +48,7 @@ export const vi = {
     avgConnectionsPerNode: "Số kết nối trung bình mỗi node",
   },
   nodeInfo: {
+    semantic: { assertion: "Khẳng định", conflict: "Mâu thuẫn", entity: "Đối tượng", formula: "Công thức", subject: "Chủ thể", predicate: "Vị từ", object: "Giá trị / đối tượng", qualifiers: "Điều kiện", status: "Trạng thái", assertions: "Khẳng định liên quan", description: "Mô tả", attributes: "Thuộc tính", expression: "Biểu thức" },
     definedInThisFile: "Được định nghĩa trong tệp này",
     languageConcepts: "Khái niệm ngôn ngữ",
     category: "Danh mục",

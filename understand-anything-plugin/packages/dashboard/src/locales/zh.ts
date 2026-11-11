@@ -48,6 +48,7 @@ export const zh = {
     avgConnectionsPerNode: "节点平均连接数",
   },
   nodeInfo: {
+    semantic: { assertion: "主张／事实", conflict: "冲突", entity: "对象", formula: "公式", subject: "主体", predicate: "谓词", object: "值／客体", qualifiers: "限定条件", status: "状态", assertions: "关联主张", description: "说明", attributes: "属性", expression: "表达式" },
     definedInThisFile: "在此文件中定义",
     languageConcepts: "语言概念",
     category: "分类",

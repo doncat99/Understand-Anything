@@ -48,6 +48,7 @@ export const zhTW = {
     avgConnectionsPerNode: "節點平均連結數",
   },
   nodeInfo: {
+    semantic: { assertion: "主張／事實", conflict: "衝突", entity: "物件", formula: "公式", subject: "主體", predicate: "謂詞", object: "值／客體", qualifiers: "限定條件", status: "狀態", assertions: "關聯主張", description: "說明", attributes: "屬性", expression: "表達式" },
     definedInThisFile: "在此檔案中定義",
     languageConcepts: "語言概念",
     category: "分類",

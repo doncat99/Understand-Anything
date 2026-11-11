@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { SemanticDetails } from './SemanticDetails';
 import { useDashboardStore } from "../store";
 import { useI18n } from "../contexts/I18nContext";
 import type { NodeType, EdgeType, KnowledgeGraph, GraphNode } from "@understand-anything/core/types";
@@ -89,6 +90,7 @@ function KnowledgeNodeDetails({ node, graph }: { node: GraphNode; graph: Knowled
 
   return (
     <div className="space-y-3">
+      {meta?.semantic ? <SemanticDetails data={meta.semantic} labels={t.nodeInfo.semantic} /> : null}
       {categoryNode && (
         <div>
           <h4 className="text-[10px] uppercase tracking-wider text-text-muted mb-1">{t.nodeInfo.category}</h4>
@@ -376,7 +378,7 @@ export default function NodeInfo() {
         <span
           className={`text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded ${typeBadge}`}
         >
-          {node.type}
+          {node.knowledgeMeta?.semantic ? t.nodeInfo.semantic[node.knowledgeMeta.semantic.kind] : node.type}
         </span>
         <span
           className={`text-[10px] font-semibold px-2 py-0.5 rounded ${complexityBadge}`}

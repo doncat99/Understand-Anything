@@ -22,6 +22,12 @@ export type EdgeType =
 
 // Optional knowledge metadata for article/entity/topic/claim/source nodes
 export interface KnowledgeMeta {
+  semantic?: {
+    kind: 'assertion' | 'conflict' | 'entity' | 'formula';
+    subject?: string; predicate?: string; object?: unknown; qualifiers?: unknown;
+    status?: string; assertionId?: string; assertionIds?: string[]; description?: string;
+    attributes?: unknown; expression?: unknown;
+  };
   understandingGroup?: { kind: 'theme' | 'collection'; memberCount: number };
   wikilinks?: string[];
   backlinks?: string[];

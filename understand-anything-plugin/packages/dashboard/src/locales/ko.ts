@@ -48,6 +48,7 @@ export const ko = {
     avgConnectionsPerNode: "노드 평균 연결 수",
   },
   nodeInfo: {
+    semantic: { assertion: "주장 / 사실", conflict: "충돌", entity: "객체", formula: "수식", subject: "주체", predicate: "술어", object: "값 / 객체", qualifiers: "한정 조건", status: "상태", assertions: "관련 주장", description: "설명", attributes: "속성", expression: "표현식" },
     definedInThisFile: "이 파일에 정義",
     languageConcepts: "언어 개념",
     category: "카테고리",

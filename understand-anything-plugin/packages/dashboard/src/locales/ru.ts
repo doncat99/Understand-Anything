@@ -48,6 +48,7 @@ export const ru = {
     avgConnectionsPerNode: "Среднее число связей на узел",
   },
   nodeInfo: {
+    semantic: { assertion: "Утверждение", conflict: "Противоречие", entity: "Объект", formula: "Формула", subject: "Субъект", predicate: "Предикат", object: "Значение / объект", qualifiers: "Условия", status: "Статус", assertions: "Утверждения", description: "Описание", attributes: "Атрибуты", expression: "Выражение" },
     definedInThisFile: "Определено в этом файле",
     languageConcepts: "Концепции языка",
     category: "Категория",

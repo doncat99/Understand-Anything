@@ -48,6 +48,7 @@ export const en = {
     avgConnectionsPerNode: "Avg Connections per Node",
   },
   nodeInfo: {
+    semantic: { assertion: "Assertion", conflict: "Conflict", entity: "Object", formula: "Formula", subject: "Subject", predicate: "Predicate", object: "Value / object", qualifiers: "Qualifiers", status: "Status", assertions: "Assertions", description: "Description", attributes: "Attributes", expression: "Expression" },
     definedInThisFile: "Defined in this file",
     languageConcepts: "Language Concepts",
     category: "Category",
