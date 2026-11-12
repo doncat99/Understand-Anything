@@ -60,6 +60,16 @@ test('theme navigation reserves room for a qualified statement when root themes 
   assert.ok(overview.length <= 128);
   f.db.close();
 });
+test('overview shows a source-backed admitted object when no fact is qualified yet', async () => {
+  const f = fixture();
+  f.node('theme', 'topic'); f.node('object'); f.member('theme', 'object');
+  f.db.prepare('INSERT INTO ua_sources VALUES(?,?)').run('object', 'pdf');
+  await organizeIndexed(f.db as any, f.sink, f.native);
+  assert.ok(f.scenes.get('')!.includes('object'));
+  assert.ok(f.scenes.get('')!.includes('theme'));
+  assert.equal(f.db.prepare("SELECT count(*) AS n FROM ua_catalog WHERE type='claim'").get()!.n, 0);
+  f.db.close();
+});
 test('indexed scenes retain nested/overlapping rollups, direction, provenance and source-backed reading', async () => {
   const f = fixture();
   for (const id of ['outer','inner','other']) f.node(id, 'topic');
@@ -68,10 +78,10 @@ test('indexed scenes retain nested/overlapping rollups, direction, provenance an
   f.fact('r','a','b'); f.fact('back','a','b','backward'); f.fact('direct','a','ungrouped');
   f.db.prepare('INSERT INTO ua_sources VALUES(?,?)').run('a','pdf');
   const result = await organizeIndexed(f.db as any, f.sink, f.native);
-  assert.deepEqual(f.scenes.get(''), ['other','outer','ua:navigation:concept','ua:navigation:content','ua:navigation:sources','ua:navigation:themes']);
+  assert.deepEqual(f.scenes.get(''), ['a','other','outer','ua:navigation:concept','ua:navigation:content','ua:navigation:sources','ua:navigation:themes']);
   assert.ok(f.scenes.get('ua:navigation:content')!.includes('ungrouped'));
   const rootEdges = f.edges.filter(edge => edge.metadata?.sceneId === 'overview');
-  assert.ok(rootEdges.some(edge => edge.source === 'outer' && edge.target === 'other' && edge.metadata.direction === 'backward'));
+  assert.ok(rootEdges.some(edge => edge.source === 'a' && edge.target === 'other' && edge.metadata.direction === 'backward'));
   assert.ok(!rootEdges.some(edge => edge.target.startsWith('ua:navigation:')));
   assert.ok(f.lessons.some(lesson => lesson.nodeIds.includes('a') && lesson.sourceIds.includes('pdf')));
   assert.equal(result.coverage.plannedKnowledgeNodeCount, 1);
@@ -94,7 +104,7 @@ test('equal membership never aliases semantic topics; structural communities do 
   f.db.prepare('INSERT INTO ua_catalog(id,type,label,source) VALUES(?,?,?,?)').run('source:card','source','PDF','canonical-pdf');
   f.db.prepare('INSERT INTO ua_sources VALUES(?,?)').run('a','canonical-pdf');
   await organizeIndexed(f.db as any,f.sink,f.native);
-  assert.deepEqual(f.scenes.get(''),['other-topic','topic','ua:navigation:concept','ua:navigation:content','ua:navigation:sources','ua:navigation:themes']);
+  assert.deepEqual(f.scenes.get(''),['a','other-topic','topic','ua:navigation:concept','ua:navigation:content','ua:navigation:sources','ua:navigation:themes']);
   assert.deepEqual(f.scenes.get('topic'),['topic','a']);
   assert.deepEqual(f.scenes.get('source:card'),['source:card','a']);
   assert.equal(f.lessons.length,2);
@@ -106,7 +116,7 @@ test('unqualified topology stays navigation while its source-backed concept has 
   f.member('legacy-topic','a'); f.member('community','a');
   f.db.prepare('INSERT INTO ua_sources VALUES(?,?)').run('a','pdf');
   const result = await organizeIndexed(f.db as any,f.sink,f.native);
-  assert.deepEqual(f.scenes.get(''),['ua:navigation:concept','ua:navigation:content','ua:navigation:sources','ua:navigation:themes']);
+  assert.deepEqual(f.scenes.get(''),['a','ua:navigation:concept','ua:navigation:content','ua:navigation:sources','ua:navigation:themes']);
   assert.ok(f.scenes.get('ua:navigation:content')!.includes('legacy-topic'));
   assert.ok(f.scenes.get('community')!.includes('a'));
   assert.equal(result.totalModules,1); assert.equal(f.lessons.length,1);

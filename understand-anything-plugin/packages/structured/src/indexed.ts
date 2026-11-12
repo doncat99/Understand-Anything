@@ -283,6 +283,12 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
     }
     after = String(candidates.at(-1)!.id);
   }
+  // A missing qualified fact must not hide an already admitted source-backed object.
+  if (visible.size < 128 && ![...visible].some(id => one("SELECT 1 FROM ua_catalog WHERE id=? AND type IN ('concept','entity','claim')", id))) {
+    const object = one(`SELECT c.id FROM ua_catalog c WHERE c.type IN ('concept','entity')
+      AND EXISTS(SELECT 1 FROM ua_sources s WHERE s.node=c.id) ORDER BY c.id LIMIT 1`);
+    if (object) visible.add(String(object.id));
+  }
   const mixed = [...visible].sort();
   run("UPDATE ua_scenes SET ids=? WHERE id=''", JSON.stringify(mixed));
   processScene('', String(overview.title), mixed);
