@@ -186,7 +186,8 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
   // Keep type entries reachable even when there are more themes than one page.
   navigation('ua:navigation:themes', 'Themes', 'SELECT id FROM ua_topics WHERE id>? ORDER BY id LIMIT 128');
   const rootThemes = `SELECT t.id FROM ua_topics t WHERE NOT EXISTS(SELECT 1 FROM ua_navigation m JOIN ua_topics p ON p.id=m.parent WHERE m.child=t.id)`;
-  const showThemes = count(`SELECT count(*) n FROM (${rootThemes})`) <= 119;
+  const showThemes = count(`SELECT count(*) n FROM (${rootThemes})`)
+    + count("SELECT count(*) n FROM ua_catalog WHERE id LIKE 'ua:navigation:%'") <= 125;
   sceneFor('', 'Overview', `SELECT id FROM (
     SELECT id FROM ua_catalog WHERE id LIKE 'ua:navigation:%'
     ${showThemes ? `UNION ${rootThemes}` : ''}) WHERE id>? ORDER BY id LIMIT 128`, []);
@@ -207,8 +208,6 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
     run('INSERT INTO ua_reading_scopes VALUES(?,?)', id, id);
     processScene(id, String(row.label), [id]);
   }
-  const overview = one("SELECT title,ids FROM ua_scenes WHERE id=''")!;
-  processScene('', String(overview.title), JSON.parse(String(overview.ids)) as string[]);
   function processScene(scope: string, title: string, ids: string[]) {
     sink.check(); sink.scene(scope, title, ids);
     if (!one('SELECT 1 FROM ua_reading_scopes WHERE id=?', scope)) return;
@@ -250,6 +249,43 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
     run('UPDATE ua_components SET parent=? WHERE id=?', parent.id, child.id);
     if (a.rank === b.rank) run('UPDATE ua_components SET rank=rank+1 WHERE id=?', parent.id);
   }
+  // Admitted facts anchor mixed scenes; an edge alone never creates a claim card.
+  const overview = one("SELECT title,ids FROM ua_scenes WHERE id=''")!;
+  const visible = new Set(JSON.parse(String(overview.ids)) as string[]);
+  const addFact = (fact: Row | undefined) => {
+    if (!fact) return;
+    const ids = [...new Set([fact.id, fact.source, fact.target].map(String))];
+    if (visible.size + ids.filter(id => !visible.has(id)).length > 128) return;
+    for (const id of ids) visible.add(id);
+  };
+  // One grounded example per visible theme before filling unrepresented objects.
+  for (const theme of [...visible].filter(id => one('SELECT 1 FROM ua_topics WHERE id=?', id))) {
+    sink.check();
+    addFact(one(`WITH RECURSIVE members(id) AS (VALUES(?) UNION
+      SELECT n.child FROM ua_navigation n JOIN members m ON n.parent=m.id)
+      SELECT r.id,r.source,r.target FROM temp.ua_build_relations r
+      JOIN ua_catalog c ON c.id=r.id AND c.type='claim'
+      JOIN ua_catalog s ON s.id=r.source AND s.type IN ('concept','entity')
+      JOIN ua_catalog t ON t.id=r.target AND t.type IN ('concept','entity')
+      WHERE r.source IN members AND r.target IN members ORDER BY r.id LIMIT 1`, theme));
+  }
+  let after = '';
+  while (visible.size < 128) {
+    sink.check();
+    const candidates = rows(`SELECT r.id,r.source,r.target FROM temp.ua_build_relations r
+      JOIN ua_catalog c ON c.id=r.id AND c.type='claim'
+      JOIN ua_catalog s ON s.id=r.source AND s.type IN ('concept','entity')
+      JOIN ua_catalog t ON t.id=r.target AND t.type IN ('concept','entity')
+      WHERE r.id>? ORDER BY r.id LIMIT 128`, after);
+    if (!candidates.length) break;
+    for (const fact of candidates) {
+      if (!visible.has(String(fact.source)) || !visible.has(String(fact.target))) addFact(fact);
+    }
+    after = String(candidates.at(-1)!.id);
+  }
+  const mixed = [...visible].sort();
+  run("UPDATE ua_scenes SET ids=? WHERE id=''", JSON.stringify(mixed));
+  processScene('', String(overview.title), mixed);
   await organizeIndexedScene(db, sink, '');
   const communitySizes = one("SELECT count(*) AS n,coalesce(min(size),0) AS min,coalesce(max(size),0) AS max FROM (SELECT n.id,count(m.child) AS size FROM ua_catalog n LEFT JOIN ua_members m ON m.parent=n.id WHERE n.type='community' GROUP BY n.id)")!;
   const isolatedNodeCount = count('SELECT count(*) n FROM ua_components WHERE conceptConnected=0');

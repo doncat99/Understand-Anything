@@ -32,6 +32,34 @@ function fixture() {
     lesson(_: number, lesson: any) { lessons.push(lesson); }, check() {} };
   return { db, node, member, fact, scenes, edges, lessons, refs, sink, native, requests, topologyRequests };
 }
+test('overview includes admitted facts and their objects alongside themes, without inventing fact cards for raw edges', async () => {
+  const f = fixture();
+  f.node('theme', 'topic');
+  for (const id of ['company', 'emissions', 'unqualified-neighbor']) f.node(id);
+  f.node('supported-fact', 'claim');
+  f.member('theme', 'company'); f.member('theme', 'emissions');
+  f.fact('supported-fact', 'company', 'emissions');
+  f.fact('raw-relation', 'company', 'unqualified-neighbor');
+  await organizeIndexed(f.db as any, f.sink, f.native);
+  const overview = f.scenes.get('')!;
+  for (const id of ['theme', 'company', 'emissions', 'supported-fact']) assert.ok(overview.includes(id), id);
+  assert.ok(!overview.includes('raw-relation'));
+  assert.ok(!overview.includes('unqualified-neighbor'));
+  assert.ok(overview.includes('ua:navigation:sources'));
+  f.db.close();
+});
+test('theme navigation reserves room for a qualified statement when root themes fill the scene', async () => {
+  const f = fixture();
+  for (let i = 0; i < 119; i++) f.node(`theme-${i}`, 'topic');
+  for (const type of ['entity', 'conflict', 'formula']) f.node(`typed-${type}`, type);
+  f.node('a'); f.node('b'); f.node('supported', 'claim');
+  f.fact('supported', 'a', 'b');
+  await organizeIndexed(f.db as any, f.sink, f.native);
+  const overview = f.scenes.get('')!;
+  for (const id of ['a', 'b', 'supported', 'ua:navigation:themes']) assert.ok(overview.includes(id), id);
+  assert.ok(overview.length <= 128);
+  f.db.close();
+});
 test('indexed scenes retain nested/overlapping rollups, direction, provenance and source-backed reading', async () => {
   const f = fixture();
   for (const id of ['outer','inner','other']) f.node(id, 'topic');
