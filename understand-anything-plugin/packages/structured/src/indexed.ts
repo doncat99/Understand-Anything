@@ -106,14 +106,14 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
     for (const member of members) run('INSERT INTO ua_navigation VALUES(?,?)', id, member);
     return id;
   };
-  // Reserve one slot for a group's own card: a scene always contains <=128 cards.
+  // Reserve one slot for a group's own card: a scene always contains <=1024 cards.
   const storeScene = (scope: string, title: string, members: string[]) => {
     const ids = scope ? [scope, ...members.filter(id => id !== scope)] : members;
     run('INSERT INTO ua_scenes VALUES(?,?,?)', scope, title, JSON.stringify(ids));
   };
   const sceneFor = (scope: string, title: string, sql: string, args: unknown[]) => {
     let members: string[] = [];
-    const capacity = scope ? 127 : 128;
+    const capacity = scope ? 1023 : 1024;
     let childLevel = 0;
     const navigationOnly = !!one('SELECT navigationRoot FROM ua_catalog WHERE id=?', scope)?.navigationRoot;
     const readingTopic = one('SELECT topic FROM ua_reading_scopes WHERE id=?', scope)?.topic as string | undefined;
@@ -125,7 +125,7 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
       if (id === scope) continue;
       members.push(id);
       if (members.length === capacity + 1) {
-        const overflow = members.splice(127);
+        const overflow = members.splice(1023);
         const child = addCollection(members, `${title} · ${sequence + 1}`, readingTopic, navigationOnly);
         storeScene(child, `${title} · ${sequence}`, members);
         run('INSERT INTO ua_queue VALUES(?,?)', 0, child);
@@ -142,7 +142,7 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
       members = [];
       for (const row of scan('SELECT id FROM ua_queue WHERE level=? AND id>? ORDER BY id LIMIT 128', [childLevel])) {
         members.push(String(row.id));
-        if (members.length === 127) {
+        if (members.length === 1023) {
           const child = addCollection(members, `${title} · ${sequence + 1}`, readingTopic, navigationOnly);
           storeScene(child, `${title} · ${sequence}`, members);
           run('INSERT INTO ua_queue VALUES(?,?)', childLevel + 1, child); members = [];
@@ -155,7 +155,7 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
       }
       childLevel++;
     }
-    storeScene(scope, title, rows('SELECT id FROM ua_queue WHERE level=? ORDER BY id LIMIT 128', childLevel).map(row => String(row.id)));
+    storeScene(scope, title, rows('SELECT id FROM ua_queue WHERE level=? ORDER BY id LIMIT 1024', childLevel).map(row => String(row.id)));
   };
   for (const row of scan("SELECT id,type,label,organization FROM ua_catalog n WHERE type IN ('topic','community','cluster') AND id NOT LIKE 'ua:collection:%' AND id>? ORDER BY id LIMIT 128")) {
     const id = String(row.id), title = String(row.label);
@@ -187,7 +187,7 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
   navigation('ua:navigation:themes', 'Themes', 'SELECT id FROM ua_topics WHERE id>? ORDER BY id LIMIT 128');
   const rootThemes = `SELECT t.id FROM ua_topics t WHERE NOT EXISTS(SELECT 1 FROM ua_navigation m JOIN ua_topics p ON p.id=m.parent WHERE m.child=t.id)`;
   const showThemes = count(`SELECT count(*) n FROM (${rootThemes})`)
-    + count("SELECT count(*) n FROM ua_catalog WHERE id LIKE 'ua:navigation:%'") <= 125;
+    + count("SELECT count(*) n FROM ua_catalog WHERE id LIKE 'ua:navigation:%'") <= 1021;
   sceneFor('', 'Overview', `SELECT id FROM (
     SELECT id FROM ua_catalog WHERE id LIKE 'ua:navigation:%'
     ${showThemes ? `UNION ${rootThemes}` : ''}) WHERE id>? ORDER BY id LIMIT 128`, []);
@@ -255,7 +255,7 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
   const addFact = (fact: Row | undefined) => {
     if (!fact) return;
     const ids = [...new Set([fact.id, fact.source, fact.target].map(String))];
-    if (visible.size + ids.filter(id => !visible.has(id)).length > 128) return;
+    if (visible.size + ids.filter(id => !visible.has(id)).length > 1024) return;
     for (const id of ids) visible.add(id);
   };
   // One grounded example per visible theme before filling unrepresented objects.
@@ -270,7 +270,7 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
       WHERE r.source IN members AND r.target IN members ORDER BY r.id LIMIT 1`, theme));
   }
   let after = '';
-  while (visible.size < 128) {
+  while (visible.size < 1024) {
     sink.check();
     const candidates = rows(`SELECT r.id,r.source,r.target FROM temp.ua_build_relations r
       JOIN ua_catalog c ON c.id=r.id AND c.type='claim'
@@ -284,7 +284,7 @@ export async function organizeIndexed(db: IndexedDatabase, sink: IndexedSink, na
     after = String(candidates.at(-1)!.id);
   }
   // A missing qualified fact must not hide an already admitted source-backed object.
-  if (visible.size < 128 && ![...visible].some(id => one("SELECT 1 FROM ua_catalog WHERE id=? AND type IN ('concept','entity','claim')", id))) {
+  if (visible.size < 1024 && ![...visible].some(id => one("SELECT 1 FROM ua_catalog WHERE id=? AND type IN ('concept','entity','claim')", id))) {
     const object = one(`SELECT c.id FROM ua_catalog c WHERE c.type IN ('concept','entity')
       AND EXISTS(SELECT 1 FROM ua_sources s WHERE s.node=c.id) ORDER BY c.id LIMIT 1`);
     if (object) visible.add(String(object.id));

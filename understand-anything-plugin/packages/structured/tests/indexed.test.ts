@@ -28,7 +28,7 @@ function fixture() {
   } };
   const scenes = new Map<string, string[]>(), edges: any[] = [], lessons: any[] = [], refs: string[] = [];
   const sink = { node() {}, edge: (edge: any) => edges.push(edge), reference: (_: string, relation: string) => refs.push(relation),
-    scene(scope: string, _: string, ids: string[]) { assert.ok(ids.length <= 128); scenes.set(scope, ids); },
+    scene(scope: string, _: string, ids: string[]) { assert.ok(ids.length <= 1024); scenes.set(scope, ids); },
     lesson(_: number, lesson: any) { lessons.push(lesson); }, check() {} };
   return { db, node, member, fact, scenes, edges, lessons, refs, sink, native, requests, topologyRequests };
 }
@@ -50,14 +50,14 @@ test('overview includes admitted facts and their objects alongside themes, witho
 });
 test('theme navigation reserves room for a qualified statement when root themes fill the scene', async () => {
   const f = fixture();
-  for (let i = 0; i < 119; i++) f.node(`theme-${i}`, 'topic');
+  for (let i = 0; i < 1013; i++) f.node(`theme-${i}`, 'topic');
   for (const type of ['entity', 'conflict', 'formula']) f.node(`typed-${type}`, type);
   f.node('a'); f.node('b'); f.node('supported', 'claim');
   f.fact('supported', 'a', 'b');
   await organizeIndexed(f.db as any, f.sink, f.native);
   const overview = f.scenes.get('')!;
   for (const id of ['a', 'b', 'supported', 'ua:navigation:themes']) assert.ok(overview.includes(id), id);
-  assert.ok(overview.length <= 128);
+  assert.equal(overview.length, 1024);
   f.db.close();
 });
 test('overview shows a source-backed admitted object when no fact is qualified yet', async () => {
@@ -90,13 +90,14 @@ test('indexed scenes retain nested/overlapping rollups, direction, provenance an
 test('large themes stay fully reachable through bounded collections and cycles remain reachable', async () => {
   const f = fixture(); f.node('theme','topic'); f.node('cycleA','topic'); f.node('cycleB','topic');
   f.member('cycleA','cycleB'); f.member('cycleB','cycleA');
-  for (let i=0;i<500;i++) { f.node(`n${i}`); f.member('theme',`n${i}`); }
+  for (let i=0;i<1500;i++) { f.node(`n${i}`); f.member('theme',`n${i}`); }
   await organizeIndexed(f.db as any, f.sink, f.native);
   assert.ok(f.scenes.get('ua:navigation:content')!.includes('cycleA'));
-  assert.ok(f.scenes.get('theme')!.length < 128);
+  assert.ok(f.scenes.get('theme')!.length < 1024);
+  assert.ok([...f.scenes.values()].some(ids => ids.length === 1024));
   const seen = new Set<string>(); const visit = (id: string) => { if(seen.has(id))return; seen.add(id); for(const child of f.scenes.get(id) ?? []) if(child!==id)visit(child); };
   for(const id of f.scenes.get('')!)visit(id);
-  for(let i=0;i<500;i++)assert.ok(seen.has(`n${i}`)); f.db.close();
+  for(let i=0;i<1500;i++)assert.ok(seen.has(`n${i}`)); f.db.close();
 });
 test('equal membership never aliases semantic topics; structural communities do not create lessons', async () => {
   const f = fixture(); f.node('topic', 'topic'); f.node('other-topic','topic'); f.node('community','community'); f.node('a');
